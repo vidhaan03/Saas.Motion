@@ -67,6 +67,25 @@ export const CTACard: React.FC<Props> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
 
+  // Headline font auto-shrinks so the longest word fits the available width.
+  // At weight-900 Inter, each glyph is roughly 0.55em wide; the side padding
+  // is 96px on each edge, so usable content width = videoWidth - 192.
+  const { width: videoWidth } = useVideoConfig();
+  const contentWidth = Math.max(360, videoWidth - 2 * 96);
+  const longestWord = headline
+    .split(/\s+/)
+    .reduce((a, b) => (a.length >= b.length ? a : b), "");
+  const longestLen = Math.max(longestWord.length, 1);
+  const maxFontByWord = (contentWidth * 0.92) / (longestLen * 0.55);
+  // Also keep total headline reasonable for multi-line wrap (assume ~2 lines).
+  const maxFontByTotal =
+    (contentWidth * 2 * 0.92) / (Math.max(headline.length, 1) * 0.55);
+  const headlineFontSize = Math.min(
+    THEME.size.hero,
+    maxFontByWord,
+    maxFontByTotal,
+  );
+
   return (
     <AbsoluteFill style={{ background: bg, opacity: exitT }}>
       <AbsoluteFill
@@ -83,12 +102,13 @@ export const CTACard: React.FC<Props> = ({
           style={{
             fontFamily,
             fontWeight: THEME.weight.black,
-            fontSize: THEME.size.hero,
+            fontSize: headlineFontSize,
             lineHeight: 0.95,
             letterSpacing: THEME.tracking.hero,
             color: fg,
             textAlign: "center",
-            maxWidth: 900,
+            maxWidth: contentWidth,
+            wordBreak: "break-word",
             transform: `translateY(${interpolate(headlineT, [0, 1], [24, 0])}px)`,
             opacity: headlineT,
           }}

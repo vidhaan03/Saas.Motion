@@ -1,6 +1,5 @@
 import {
   AbsoluteFill,
-  Img,
   interpolate,
   useCurrentFrame,
   useVideoConfig,
@@ -36,7 +35,6 @@ export const LogoWall: React.FC<Props> = ({
   const fg = isLight ? THEME.text.onLight : THEME.text.onDark;
   const muted = isLight ? THEME.text.onLightMuted : THEME.text.onDarkMuted;
   const divider = isLight ? "rgba(10,10,12,0.08)" : "rgba(255,255,255,0.08)";
-  const logoTint = isLight ? "#0a0a0c" : "#ffffff";
 
   const headingT = interpolate(frame, [0, 18], [0, 1], {
     extrapolateLeft: "clamp",
@@ -51,6 +49,19 @@ export const LogoWall: React.FC<Props> = ({
   );
 
   const columns = logos.length <= 4 ? 2 : 3;
+
+  // Stable monogram color per logo (hashed name → muted accent). Keeps the
+  // fallback feeling intentional rather than random gray squares.
+  const monogramTint = (name: string) => {
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+      hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+    }
+    const palette = isLight
+      ? ["#2D2A26", "#7A4631", "#3D5A4A", "#5C4A6E", "#6E5C2D", "#8B3A2E"]
+      : ["#A4B0F5", "#22D3EE", "#F472B6", "#FCD34D", "#34D399", "#FB7185"];
+    return palette[hash % palette.length];
+  };
 
   return (
     <AbsoluteFill style={{ background: bg, opacity: exitT }}>
@@ -110,28 +121,62 @@ export const LogoWall: React.FC<Props> = ({
                   transform: `translateY(${interpolate(enter, [0, 1], [12, 0])}px)`,
                 }}
               >
-                {logo.logoUrl ? (
-                  <Img
-                    src={logo.logoUrl}
-                    style={{
-                      width: 34,
-                      height: 34,
-                      objectFit: "contain",
-                      flexShrink: 0,
-                      filter: isLight ? "none" : "brightness(0) invert(1)",
-                    }}
-                  />
-                ) : (
-                  <div
-                    style={{
-                      width: 14,
-                      height: 14,
-                      borderRadius: 4,
-                      background: logoTint,
-                      flexShrink: 0,
-                    }}
-                  />
-                )}
+                {(() => {
+                  const tint = monogramTint(logo.name);
+                  const monogram = (logo.name?.[0] ?? "?").toUpperCase();
+                  return (
+                    <div
+                      style={{
+                        position: "relative",
+                        width: 48,
+                        height: 48,
+                        borderRadius: 10,
+                        background: isLight
+                          ? "rgba(10,10,12,0.05)"
+                          : "rgba(255,255,255,0.06)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontFamily,
+                          fontWeight: 700,
+                          fontSize: 24,
+                          color: tint,
+                          letterSpacing: "-0.02em",
+                          lineHeight: 1,
+                        }}
+                      >
+                        {monogram}
+                      </div>
+                      {logo.logoUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={logo.logoUrl}
+                          alt=""
+                          style={{
+                            position: "absolute",
+                            inset: 0,
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "contain",
+                            padding: 8,
+                            filter: isLight ? "none" : "brightness(0) invert(1)",
+                          }}
+                          onError={(e) => {
+                            // Hide on 404 so the monogram below stays visible.
+                            (e.currentTarget as HTMLImageElement).style.display =
+                              "none";
+                          }}
+                        />
+                      ) : null}
+                    </div>
+                  );
+                })()}
                 <div
                   style={{
                     fontFamily,

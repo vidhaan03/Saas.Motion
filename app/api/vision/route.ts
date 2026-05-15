@@ -1,6 +1,9 @@
 import { z } from "zod";
 import {
-  suggestCursorPathWithGemini,
+  // Older single-Gemini handler — kept for reference, no longer the entry
+  // point. The route now uses the MoE-style orchestrator below.
+  // suggestCursorPathWithGemini,
+  suggestCursorPath,
   suggestionsToActions,
 } from "../../../lib/vision";
 
@@ -29,7 +32,9 @@ export async function POST(request: Request) {
   const { screenshotUrl, caption, duration } = parsed.data;
 
   try {
-    const suggestions = await suggestCursorPathWithGemini(
+    // Runs Qwen 3.5 397B → Llama 3.2 90B Vision → Gemini in order and
+    // returns the first non-empty result along with which model answered.
+    const { suggestions, source } = await suggestCursorPath(
       screenshotUrl,
       caption,
     );
@@ -40,14 +45,20 @@ export async function POST(request: Request) {
       );
     }
     const actions = suggestionsToActions(suggestions, duration);
-    return Response.json({
-      suggestions,
-      actions,
-      source: process.env.GEMINI_MODEL ?? "gemini-3-flash-preview",
-    });
+    return Response.json({ suggestions, actions, source });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Vision call failed";
-    const status = message.includes("GEMINI_API_KEY") ? 503 : 500;
-    return Response.json({ error: message }, { status });
+    // 503 if no keys available at all; 500 otherwise.
+    const noKeys =
+      message.includes("All vision agents failed") &&
+      !process.env.NVIDIA_NIM_API_KEY &&
+      !process.env.GEMINI_API_KEY;
+    return Response.json({ error: message }, { status: noKeys ? 503 : 500 });
   }
 }
+
+// ─── Older single-Gemini handler (kept for reference) ───
+// export async function POST(request: Request) {
+//   ...same as above but called suggestCursorPathWithGemini() instead of
+//   suggestCursorPath() and hard-coded source to GEMINI_MODEL...
+// }

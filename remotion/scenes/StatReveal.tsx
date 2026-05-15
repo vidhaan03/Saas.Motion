@@ -87,6 +87,23 @@ export const StatReveal: React.FC<Props> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
 
+  // Value font shrinks to fit the canvas. "9,998,572+" at 220px is already
+  // ~1090px wide — anything longer (10-digit value, multiple commas) clips.
+  // Side padding is 80px each edge, so usable content width = videoWidth-160.
+  const { width: videoWidth } = useVideoConfig();
+  const contentWidth = Math.max(360, videoWidth - 2 * 80);
+  // Approximate display string (post-formatting) so the size doesn't jitter
+  // as countT animates from 0 → 1. Use the final-state value for measuring.
+  const measureString = parsed
+    ? `${parsed.prefix}${formatNumber(parsed.num, parsed.num)}${parsed.suffix}${suffix ?? ""}`
+    : value + (suffix ?? "");
+  // Inter weight-900 numerals are ~0.55em wide.
+  const valueFontSize = Math.min(
+    THEME.size.hero,
+    (contentWidth * 0.92) / (Math.max(measureString.length, 1) * 0.55),
+  );
+  const suffixFontSize = Math.round(valueFontSize * 0.5);
+
   return (
     <AbsoluteFill style={{ background: bg, opacity: exitT }}>
       <AbsoluteFill
@@ -96,14 +113,14 @@ export const StatReveal: React.FC<Props> = ({
           alignItems: "center",
           justifyContent: "center",
           padding: `${THEME.padding.scene}px 80px`,
-          gap: 12,
+          gap: 36,
         }}
       >
         <div
           style={{
             fontFamily,
             fontWeight: THEME.weight.black,
-            fontSize: THEME.size.hero,
+            fontSize: valueFontSize,
             letterSpacing: THEME.tracking.hero,
             color: brand.accent,
             lineHeight: 1,
@@ -115,7 +132,13 @@ export const StatReveal: React.FC<Props> = ({
         >
           {displayValue}
           {suffix ? (
-            <span style={{ fontSize: 110, marginLeft: 6, opacity: 0.9 }}>
+            <span
+              style={{
+                fontSize: suffixFontSize,
+                marginLeft: 6,
+                opacity: 0.9,
+              }}
+            >
               {suffix}
             </span>
           ) : null}
@@ -123,11 +146,13 @@ export const StatReveal: React.FC<Props> = ({
         <div
           style={{
             fontFamily,
-            fontWeight: THEME.weight.regular,
-            fontSize: THEME.size.label,
+            fontWeight: THEME.weight.medium,
+            fontSize: THEME.size.body,
             letterSpacing: THEME.tracking.label,
             textTransform: "uppercase",
             color: muted,
+            textAlign: "center",
+            maxWidth: contentWidth,
             transform: `translateY(${interpolate(labelT, [0, 1], [12, 0])}px)`,
             opacity: labelT,
           }}

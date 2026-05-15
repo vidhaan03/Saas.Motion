@@ -52,10 +52,55 @@ type StreamState =
       phase: "streaming";
       total: number;
       received: number;
-      source: "mock" | "claude" | "gemini";
+      // Older type was "mock" | "claude" | "gemini" — kept for reference.
+      source: | "mock"
+      | "claude"
+      | "gemini"
+      | "nim-gemma"
+      | "nim-llama"
+      | "agentic-nim"
+      | "agentic-mixed";
     }
-  | { phase: "done"; source: "mock" | "claude" | "gemini" }
+  | {
+      phase: "done";
+      source: | "mock"
+      | "claude"
+      | "gemini"
+      | "nim-gemma"
+      | "nim-llama"
+      | "agentic-nim"
+      | "agentic-mixed";
+    }
   | { phase: "error"; message: string };
+
+const humanSourceName = (
+  s:
+    | "mock"
+    | "claude"
+    | "gemini"
+    | "nim-gemma"
+    | "nim-llama"
+    | "agentic-nim"
+    | "agentic-mixed",
+): string => {
+  switch (s) {
+    case "agentic-nim":
+      return "Agentic MoE · NIM Gemma";
+    case "agentic-mixed":
+      return "Agentic MoE · NIM + Gemini";
+    case "nim-gemma":
+      return "NIM · Gemma 4 31B";
+    case "nim-llama":
+      return "NIM · Llama 3.1 405B";
+    case "gemini":
+      return "Gemini";
+    case "claude":
+      return "Claude";
+    case "mock":
+    default:
+      return "mock generator";
+  }
+};
 
 const sceneLabel = (s: Scene) => {
   switch (s.type) {
@@ -211,7 +256,12 @@ export default function Home() {
 
       const accumulated: Scene[] = [];
       let total = 0;
-      let source: "mock" | "claude" | "gemini" = "mock";
+      let source:
+        | "mock"
+        | "claude"
+        | "gemini"
+        | "nim-gemma"
+        | "nim-llama" = "mock";
       const liveBrand = { name: brandName, color, accent };
 
       while (true) {
@@ -620,11 +670,7 @@ export default function Home() {
     const progress = total > 0 ? sceneCount / total : 0;
     const sourceLabel =
       stream.phase === "streaming" || stream.phase === "done"
-        ? stream.source === "gemini"
-          ? "gemini 3"
-          : stream.source === "claude"
-            ? "claude sonnet 4.6"
-            : "mock generator"
+        ? humanSourceName(stream.source).toLowerCase()
         : "starting…";
 
     return (
@@ -669,12 +715,16 @@ export default function Home() {
                     : `Writing scene ${Math.min(sceneCount + 1, total)} of ${total}`}
               </div>
               <h1
-                className="mt-3 font-black leading-[0.95] tracking-[-0.04em]"
-                style={{ fontSize: "clamp(48px, 7vw, 96px)" }}
+                className="mt-3 flex flex-col font-black tracking-[-0.04em]"
+                style={{
+                  fontSize: "clamp(48px, 7vw, 96px)",
+                  lineHeight: 1,
+                }}
               >
-                {storyboard.brand.name || "Storyboard"}
-                <br />
-                <span className="text-[#A39C8F]">in progress.</span>
+                <span className="block pb-[0.08em]">
+                  {storyboard.brand.name || "Storyboard"}
+                </span>
+                <span className="block text-[#A39C8F]">in progress.</span>
               </h1>
 
               <div className="mt-14">

@@ -164,6 +164,116 @@ const validateSuggestions = (raw: unknown[]): CursorSuggestion[] => {
   return out;
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Vision pipeline (MoE fallback chain)
+//
+//   shot URL ─▶ NIM Qwen 3.5 397B (a17b)  [primary, multimodal]
+//              └─ fail ─▶ NIM Llama 3.2 90B Vision  [primary fallback]
+//                         └─ fail ─▶ Gemini 3 Flash  [secondary fallback]
+//                                    └─ fail ─▶ throw
+//
+// Each function takes the same {screenshotUrl, caption} pair and returns
+// CursorSuggestion[]. The orchestrator `suggestCursorPath` runs them in
+// order and returns the first non-empty result.
+//
+// Multiple-shot parallelism is at the caller site: each shot triggers an
+// independent call, so they already run concurrently via the browser fetch.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Generic helper for a NIM multimodal chat call. Used by both Qwen and the
+// Llama vision model — they share the OpenAI-compatible payload shape.
+const callNvidiaVision = async (
+  model: string,
+  prompt: string,
+  base64: string,
+  mimeType: string,
+): Promise<string | null> => {
+  const apiKey = process.env.NVIDIA_NIM_API_KEY;
+  if (!apiKey) return null;
+
+  const endpoint =
+    process.env.NVIDIA_NIM_BASE_URL ??
+    "https://integrate.api.nvidia.com/v1/chat/completions";
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+      accept: "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            {
+              type: "image_url",
+              image_url: { url: `data:${mimeType};base64,${base64}` },
+            },
+          ],
+        },
+      ],
+      temperature: 0.2,
+      max_tokens: 4096,
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(
+      `NIM ${model} vision error ${res.status}: ${errText.slice(0, 200)}`,
+    );
+  }
+
+  const data = (await res.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  return data.choices?.[0]?.message?.content ?? null;
+};
+
+// NIM models often emit `{ "suggestions": [...] }` rather than a raw array;
+// extractJsonArray() already handles that wrapped shape.
+const parseNvidiaVisionResponse = (
+  text: string,
+): CursorSuggestion[] => {
+  const raw = extractJsonArray(text);
+  return validateSuggestions(raw);
+};
+
+// Primary vision agent: Qwen 3.5 397B (a17b — MoE itself, 17B active).
+export const suggestCursorPathWithQwen = async (
+  screenshotUrl: string,
+  caption: string | undefined,
+): Promise<CursorSuggestion[]> => {
+  const { base64, mimeType } = await loadImageAsBase64(screenshotUrl);
+  const model =
+    process.env.NVIDIA_NIM_VISION_PRIMARY ?? "qwen/qwen3.5-397b-a17b";
+  const text = await callNvidiaVision(model, buildPrompt(caption), base64, mimeType);
+  if (!text) throw new Error(`Empty response from ${model}`);
+  return parseNvidiaVisionResponse(text);
+};
+
+// Primary fallback: Llama 3.2 90B Vision (Meta's flagship VLM on NIM).
+export const suggestCursorPathWithLlamaVision = async (
+  screenshotUrl: string,
+  caption: string | undefined,
+): Promise<CursorSuggestion[]> => {
+  const { base64, mimeType } = await loadImageAsBase64(screenshotUrl);
+  const model =
+    process.env.NVIDIA_NIM_VISION_FALLBACK ??
+    "meta/llama-3.2-90b-vision-instruct";
+  const text = await callNvidiaVision(model, buildPrompt(caption), base64, mimeType);
+  if (!text) throw new Error(`Empty response from ${model}`);
+  return parseNvidiaVisionResponse(text);
+};
+
+// Secondary fallback: Gemini (unchanged from the original implementation —
+// preserved below so we can roll back the chain by swapping the export
+// `suggestCursorPath` to point straight at it).
 export const suggestCursorPathWithGemini = async (
   screenshotUrl: string,
   caption: string | undefined,
@@ -282,4 +392,63 @@ export const suggestionsToActions = (
   });
 
   return actions;
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Orchestrator: runs the vision agents in order until one succeeds.
+//
+// Returns CursorSuggestion[] AND which model produced them, so callers
+// (and the API route) can surface that in telemetry.
+// ─────────────────────────────────────────────────────────────────────────
+
+export type VisionSource = "nim-qwen" | "nim-llama-vision" | "gemini";
+
+export const suggestCursorPath = async (
+  screenshotUrl: string,
+  caption: string | undefined,
+): Promise<{ suggestions: CursorSuggestion[]; source: VisionSource }> => {
+  const errors: string[] = [];
+
+  // 1) Qwen 3.5 397B (MoE, a17b active)
+  try {
+    const suggestions = await suggestCursorPathWithQwen(screenshotUrl, caption);
+    if (suggestions.length > 0) {
+      return { suggestions, source: "nim-qwen" };
+    }
+    errors.push("qwen returned 0 suggestions");
+  } catch (e) {
+    errors.push(`qwen: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // 2) Llama 3.2 90B Vision
+  try {
+    const suggestions = await suggestCursorPathWithLlamaVision(
+      screenshotUrl,
+      caption,
+    );
+    if (suggestions.length > 0) {
+      return { suggestions, source: "nim-llama-vision" };
+    }
+    errors.push("llama-vision returned 0 suggestions");
+  } catch (e) {
+    errors.push(`llama-vision: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // 3) Gemini (secondary fallback)
+  try {
+    const suggestions = await suggestCursorPathWithGemini(
+      screenshotUrl,
+      caption,
+    );
+    if (suggestions.length > 0) {
+      return { suggestions, source: "gemini" };
+    }
+    errors.push("gemini returned 0 suggestions");
+  } catch (e) {
+    errors.push(`gemini: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  throw new Error(
+    `All vision agents failed. Details: ${errors.join(" | ")}`,
+  );
 };
