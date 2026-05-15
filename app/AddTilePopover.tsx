@@ -317,7 +317,10 @@ export const AddTilePopover: React.FC<Props> = ({ anchor, onPick, onClose }) => 
           className="w-full bg-transparent text-sm text-white placeholder:text-white/30 outline-none"
         />
       </div>
-      <div className="max-h-[380px] overflow-y-auto px-2 py-2">
+      <div
+        className="overflow-y-auto px-2 py-2"
+        style={{ maxHeight: "min(640px, 72vh)" }}
+      >
         {grouped.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-white/40">
             No tiles match "{query}"
