@@ -30,6 +30,10 @@ export const defaultSfxForScene = (
       return "ding";
     case "multiScript":
       return "ding";
+    case "productCarousel":
+      return "switch";
+    case "uiShowcase":
+      return "whoosh";
   }
 };
 

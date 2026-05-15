@@ -7,6 +7,10 @@ import {
   kineticTitleVariants,
   statRevealVariants,
   ctaCardVariants,
+  productCarouselStyles,
+  uiShowcaseFrames,
+  uiShowcaseAnimations,
+  uiShowcaseTransitions,
 } from "../remotion/schema";
 
 type Action = Extract<Scene, { type: "productDemo" }>["actions"][number];
@@ -575,6 +579,1214 @@ const CTACardEditor: React.FC<{
   </div>
 );
 
+type ShotForCanvas = Extract<Scene, { type: "uiShowcase" }>["screenshots"] extends
+  | infer A
+  | undefined
+  ? A extends ReadonlyArray<infer Item>
+    ? Item
+    : never
+  : never;
+
+// Click-to-set canvases for a single shot. Two of them: zoom-target (inside
+// the screenshot) and framePosition (where the device frame sits on the
+// scene canvas). Each is independently expandable to full-screen.
+const ShotCanvases: React.FC<{
+  shot: ShotForCanvas;
+  idx: number;
+  isMaximizedZoom: boolean;
+  isMaximizedFrame: boolean;
+  onMaximize: (kind: "zoom" | "frame") => void;
+  onCollapse: () => void;
+  onUpdate: (patch: Partial<ShotForCanvas>) => void;
+}> = ({
+  shot,
+  isMaximizedZoom,
+  isMaximizedFrame,
+  onMaximize,
+  onCollapse,
+  onUpdate,
+}) => {
+  const zoom = shot.zoom;
+  const fp = shot.framePosition;
+  const [aiBusy, setAiBusy] = useState<"zoom" | "frame" | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+
+  // Ask Gemini Vision to pick a focal point inside the screenshot.
+  // Reuses /api/vision (returns suggestions on a 1000x600 grid) and uses the
+  // top-ranked suggestion as the zoom target.
+  const aiSuggestZoom = async () => {
+    if (!shot.url) return;
+    setAiBusy("zoom");
+    setAiError(null);
+    try {
+      const res = await fetch("/api/vision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          screenshotUrl: shot.url,
+          caption: shot.label,
+          duration: 60,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Vision call failed");
+      const top = data.suggestions?.[0];
+      if (!top) throw new Error("No focal point detected");
+      onUpdate({
+        zoom: {
+          x: Math.max(0, Math.min(100, Math.round((top.x / 1000) * 100))),
+          y: Math.max(0, Math.min(100, Math.round((top.y / 600) * 100))),
+          scale: zoom?.scale ?? 1.6,
+        },
+      });
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : "Vision failed");
+    } finally {
+      setAiBusy(null);
+    }
+  };
+
+  // Frame-position presets pick a sensible {x, y, scale} for the device box
+  // inside the video canvas. AI re-uses the existing /api/vision call to
+  // place "important" content roughly center-weighted if focal point is in
+  // the top half (pushes device down so the caption sits comfortably above).
+  const aiSuggestFrame = async () => {
+    if (!shot.url) return;
+    setAiBusy("frame");
+    setAiError(null);
+    try {
+      const res = await fetch("/api/vision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          screenshotUrl: shot.url,
+          caption: shot.label,
+          duration: 60,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Vision call failed");
+      const top = data.suggestions?.[0];
+      if (!top) throw new Error("No focal point detected");
+      // If focal point is in the top third of the screenshot, sink the device
+      // down so caption sits above; if bottom third, raise it. Pick scale by
+      // suggestion density (more suggestions = wider context = smaller frame).
+      const verticalRatio = top.y / 600;
+      const newY = verticalRatio < 0.33 ? 60 : verticalRatio > 0.66 ? 40 : 50;
+      const newScale =
+        (data.suggestions?.length ?? 1) >= 4 ? 0.85 : 1;
+      onUpdate({
+        framePosition: { x: 50, y: newY, scale: newScale },
+      });
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : "Vision failed");
+    } finally {
+      setAiBusy(null);
+    }
+  };
+
+  const zoomPresets: { label: string; v: number }[] = [
+    { label: "1×", v: 1 },
+    { label: "1.2×", v: 1.2 },
+    { label: "1.5×", v: 1.5 },
+    { label: "2×", v: 2 },
+    { label: "2.5×", v: 2.5 },
+  ];
+
+  const framePresets: { label: string; v: number }[] = [
+    { label: "Inset", v: 0.7 },
+    { label: "Snug", v: 0.85 },
+    { label: "Natural", v: 1 },
+    { label: "Large", v: 1.2 },
+    { label: "Full", v: 1.4 },
+  ];
+
+  const positionPresets: { label: string; x: number; y: number }[] = [
+    { label: "↖", x: 28, y: 30 },
+    { label: "↑", x: 50, y: 30 },
+    { label: "↗", x: 72, y: 30 },
+    { label: "·", x: 50, y: 50 },
+    { label: "↙", x: 28, y: 70 },
+    { label: "↓", x: 50, y: 70 },
+    { label: "↘", x: 72, y: 70 },
+  ];
+
+  // Zoom canvas — click on screenshot to set the focal point
+  const zoomCanvas = (maximized: boolean) => (
+    <>
+      <div
+        onClick={(e) => {
+          const rect = (
+            e.currentTarget as HTMLDivElement
+          ).getBoundingClientRect();
+          const x = ((e.clientX - rect.left) / rect.width) * 100;
+          const y = ((e.clientY - rect.top) / rect.height) * 100;
+          onUpdate({
+            zoom: {
+              x: Math.max(0, Math.min(100, Math.round(x))),
+              y: Math.max(0, Math.min(100, Math.round(y))),
+              scale: zoom?.scale ?? 1.5,
+            },
+          });
+        }}
+        className="relative cursor-crosshair overflow-hidden rounded border border-white/10"
+        style={{ aspectRatio: "16 / 10", width: "100%" }}
+      >
+        <img
+          src={shot.url}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.opacity = "0.3";
+          }}
+        />
+        {/* Rule-of-thirds guide */}
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            backgroundImage:
+              "linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)",
+            backgroundSize: "33.333% 33.333%",
+          }}
+        />
+        {zoom ? (
+          <div
+            className="pointer-events-none absolute"
+            style={{
+              left: `${zoom.x}%`,
+              top: `${zoom.y}%`,
+              transform: "translate(-50%, -50%)",
+            }}
+          >
+            <div
+              className="flex items-center justify-center rounded-full font-bold text-black shadow-lg"
+              style={{
+                background: "#FBBF24",
+                width: maximized ? 28 : 18,
+                height: maximized ? 28 : 18,
+                fontSize: maximized ? 14 : 10,
+              }}
+            >
+              +
+            </div>
+            <div
+              className="absolute left-1/2 top-1/2 rounded-full border-2"
+              style={{
+                width: maximized ? 120 : 56,
+                height: maximized ? 120 : 56,
+                borderColor: "#FBBF24",
+                transform: "translate(-50%, -50%)",
+                opacity: 0.45,
+              }}
+            />
+            {/* Faint scale ring preview */}
+            <div
+              className="absolute left-1/2 top-1/2 rounded-full border"
+              style={{
+                width: (maximized ? 200 : 90) * (zoom.scale / 1.5),
+                height: (maximized ? 200 : 90) * (zoom.scale / 1.5),
+                borderColor: "#FBBF24",
+                transform: "translate(-50%, -50%)",
+                opacity: 0.2,
+                borderStyle: "dashed",
+              }}
+            />
+          </div>
+        ) : null}
+      </div>
+      {/* Scale presets + AI suggest */}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {zoomPresets.map((p) => {
+          const active = zoom && Math.abs(zoom.scale - p.v) < 0.01;
+          return (
+            <button
+              key={p.label}
+              onClick={() => {
+                if (zoom) onUpdate({ zoom: { ...zoom, scale: p.v } });
+                else onUpdate({ zoom: { x: 50, y: 50, scale: p.v } });
+              }}
+              className={`rounded px-2 py-1 text-[10px] transition ${
+                active
+                  ? "bg-amber-400/20 text-amber-200 ring-1 ring-amber-400/40"
+                  : "border border-white/10 text-white/55 hover:border-white/25 hover:text-white"
+              }`}
+            >
+              {p.label}
+            </button>
+          );
+        })}
+        <button
+          onClick={aiSuggestZoom}
+          disabled={aiBusy === "zoom" || !shot.url}
+          className="ml-auto rounded border border-violet-400/30 bg-violet-400/[0.08] px-2 py-1 text-[10px] text-violet-200 transition hover:bg-violet-400/[0.16] disabled:opacity-50"
+        >
+          {aiBusy === "zoom" ? "Thinking…" : "✨ AI place"}
+        </button>
+      </div>
+      {zoom ? (
+        <div className="mt-1.5 flex items-center gap-2 text-[10px] text-white/45">
+          <span>x{zoom.x.toFixed(0)}%</span>
+          <span>y{zoom.y.toFixed(0)}%</span>
+          <span className="ml-auto flex items-center gap-1">
+            custom
+            <input
+              type="number"
+              step="0.1"
+              min="1"
+              max="3"
+              value={zoom.scale}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v))
+                  onUpdate({ zoom: { ...zoom, scale: v } });
+              }}
+              className="w-12 rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[10px] text-white outline-none"
+            />
+          </span>
+        </div>
+      ) : (
+        <div className="mt-1.5 text-[10px] text-white/35">
+          Click on the screenshot to set a focal point, or pick a scale preset to start at center.
+        </div>
+      )}
+      {aiError && aiBusy === null ? (
+        <div className="mt-1 text-[10px] text-red-300/80">{aiError}</div>
+      ) : null}
+    </>
+  );
+
+  // Frame-position canvas — represents the whole video frame; click to place
+  // the device box. The drawn rectangle scales with framePosition.scale.
+  const frameCanvas = (maximized: boolean) => (
+    <>
+      <div
+        onClick={(e) => {
+          const rect = (
+            e.currentTarget as HTMLDivElement
+          ).getBoundingClientRect();
+          const x = ((e.clientX - rect.left) / rect.width) * 100;
+          const y = ((e.clientY - rect.top) / rect.height) * 100;
+          onUpdate({
+            framePosition: {
+              x: Math.max(0, Math.min(100, Math.round(x))),
+              y: Math.max(0, Math.min(100, Math.round(y))),
+              scale: fp?.scale ?? 1,
+            },
+          });
+        }}
+        className="relative cursor-crosshair overflow-hidden rounded border border-white/10 bg-[#08080b]"
+        style={{ aspectRatio: "16 / 9", width: "100%" }}
+      >
+        {/* Grid + safe-area guides */}
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            backgroundImage:
+              "linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px)",
+            backgroundSize: "16px 16px",
+            backgroundPosition: "center",
+          }}
+        />
+        <div
+          className="pointer-events-none absolute"
+          style={{
+            inset: "8%",
+            border: "1px dashed rgba(255,255,255,0.1)",
+            borderRadius: 6,
+          }}
+        />
+        {/* Position indicator — a "device" rectangle at the framePosition */}
+        <div
+          className="pointer-events-none absolute"
+          style={{
+            left: `${fp?.x ?? 50}%`,
+            top: `${fp?.y ?? 50}%`,
+            transform: `translate(-50%, -50%) scale(${fp?.scale ?? 1})`,
+            transformOrigin: "center center",
+          }}
+        >
+          <div
+            className="rounded shadow-[0_0_24px_-4px_rgba(34,211,238,0.5)]"
+            style={{
+              width: maximized ? 180 : 110,
+              height: maximized ? 112 : 68,
+              border: "2px solid #22D3EE",
+              background: "rgba(34, 211, 238, 0.12)",
+            }}
+          />
+        </div>
+        {/* Crosshair at exact placement point */}
+        <div
+          className="pointer-events-none absolute"
+          style={{
+            left: `${fp?.x ?? 50}%`,
+            top: `${fp?.y ?? 50}%`,
+            transform: "translate(-50%, -50%)",
+            width: maximized ? 14 : 8,
+            height: maximized ? 14 : 8,
+            background: "#22D3EE",
+            borderRadius: "50%",
+            boxShadow: "0 0 0 2px rgba(0,0,0,0.6)",
+          }}
+        />
+      </div>
+
+      {/* Scale (zoom in / zoom out) presets */}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {framePresets.map((p) => {
+          const active = Math.abs((fp?.scale ?? 1) - p.v) < 0.01;
+          return (
+            <button
+              key={p.label}
+              onClick={() =>
+                onUpdate({
+                  framePosition: {
+                    x: fp?.x ?? 50,
+                    y: fp?.y ?? 50,
+                    scale: p.v,
+                  },
+                })
+              }
+              className={`rounded px-2 py-1 text-[10px] transition ${
+                active
+                  ? "bg-cyan-400/20 text-cyan-200 ring-1 ring-cyan-400/40"
+                  : "border border-white/10 text-white/55 hover:border-white/25 hover:text-white"
+              }`}
+            >
+              {p.label}
+            </button>
+          );
+        })}
+        <button
+          onClick={aiSuggestFrame}
+          disabled={aiBusy === "frame" || !shot.url}
+          className="ml-auto rounded border border-violet-400/30 bg-violet-400/[0.08] px-2 py-1 text-[10px] text-violet-200 transition hover:bg-violet-400/[0.16] disabled:opacity-50"
+        >
+          {aiBusy === "frame" ? "Thinking…" : "✨ AI place"}
+        </button>
+      </div>
+
+      {/* Quick anchor positions */}
+      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+        <span className="text-[9px] uppercase tracking-wider text-white/30">
+          anchor
+        </span>
+        {positionPresets.map((p) => {
+          const active =
+            Math.abs((fp?.x ?? 50) - p.x) < 1 &&
+            Math.abs((fp?.y ?? 50) - p.y) < 1;
+          return (
+            <button
+              key={p.label}
+              onClick={() =>
+                onUpdate({
+                  framePosition: {
+                    x: p.x,
+                    y: p.y,
+                    scale: fp?.scale ?? 1,
+                  },
+                })
+              }
+              className={`flex h-5 w-5 items-center justify-center rounded text-[10px] transition ${
+                active
+                  ? "bg-cyan-400/20 text-cyan-200"
+                  : "border border-white/10 text-white/55 hover:border-white/25 hover:text-white"
+              }`}
+            >
+              {p.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-1.5 flex items-center gap-2 text-[10px] text-white/45">
+        <span>x{(fp?.x ?? 50).toFixed(0)}%</span>
+        <span>y{(fp?.y ?? 50).toFixed(0)}%</span>
+        <span className="ml-auto flex items-center gap-1">
+          custom
+          <input
+            type="number"
+            step="0.05"
+            min="0.3"
+            max="1.5"
+            value={fp?.scale ?? 1}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              if (Number.isFinite(v))
+                onUpdate({
+                  framePosition: {
+                    x: fp?.x ?? 50,
+                    y: fp?.y ?? 50,
+                    scale: v,
+                  },
+                });
+            }}
+            className="w-12 rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[10px] text-white outline-none"
+          />
+        </span>
+      </div>
+    </>
+  );
+
+  const overlayWrap = (
+    label: string,
+    body: React.ReactNode,
+    onClear?: () => void,
+  ) => (
+    <div
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/85 p-6 backdrop-blur-xl"
+      onClick={onCollapse}
+    >
+      <div
+        className="flex w-full max-w-[1100px] items-center justify-between"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span className="font-mono text-[11px] uppercase tracking-widest text-white/55">
+          {label} · Esc to close
+        </span>
+        <div className="flex items-center gap-2">
+          {onClear ? (
+            <button
+              onClick={onClear}
+              className="rounded-md border border-white/10 px-2.5 py-1 text-[11px] text-white/60 transition hover:border-red-500/40 hover:text-red-300"
+            >
+              clear
+            </button>
+          ) : null}
+          <button
+            onClick={onCollapse}
+            className="rounded-md border border-white/10 px-2.5 py-1 text-[11px] text-white/60 transition hover:border-white/30 hover:text-white"
+          >
+            × Close
+          </button>
+        </div>
+      </div>
+      <div
+        className="w-full"
+        style={{
+          width: "min(95vw, calc(80vh * 16 / 10))",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {body}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Zoom canvas — full width */}
+      <div className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3">
+        <div className="mb-2 flex items-baseline justify-between">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-white/55">
+              Zoom target
+            </div>
+            <div className="text-[10px] text-white/35">
+              Click the screenshot to set what gets zoomed into
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-[10px]">
+            {zoom ? (
+              <button
+                onClick={() => onUpdate({ zoom: undefined })}
+                className="text-white/40 hover:text-red-300"
+              >
+                clear
+              </button>
+            ) : null}
+            <button
+              onClick={() => onMaximize("zoom")}
+              className="text-white/40 hover:text-white"
+              title="Expand"
+            >
+              ⛶ expand
+            </button>
+          </div>
+        </div>
+        {zoomCanvas(false)}
+      </div>
+
+      {/* Frame position canvas — full width */}
+      <div className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3">
+        <div className="mb-2 flex items-baseline justify-between">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-white/55">
+              Frame position &amp; zoom
+            </div>
+            <div className="text-[10px] text-white/35">
+              Where the device sits on the video canvas — scale to zoom in / out
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-[10px]">
+            {fp ? (
+              <button
+                onClick={() => onUpdate({ framePosition: undefined })}
+                className="text-white/40 hover:text-red-300"
+              >
+                reset
+              </button>
+            ) : null}
+            <button
+              onClick={() => onMaximize("frame")}
+              className="text-white/40 hover:text-white"
+              title="Expand"
+            >
+              ⛶ expand
+            </button>
+          </div>
+        </div>
+        {frameCanvas(false)}
+      </div>
+
+      {isMaximizedZoom
+        ? overlayWrap("Zoom target", zoomCanvas(true), () =>
+            onUpdate({ zoom: undefined }),
+          )
+        : null}
+      {isMaximizedFrame
+        ? overlayWrap("Frame position", frameCanvas(true), () =>
+            onUpdate({ framePosition: undefined }),
+          )
+        : null}
+    </div>
+  );
+};
+
+const UiShowcaseEditor: React.FC<{
+  scene: Extract<Scene, { type: "uiShowcase" }>;
+  onChange: (next: Scene) => void;
+}> = ({ scene, onChange }) => {
+  // shots is the canonical list; if user has only the legacy screenshot field,
+  // surface that as a single-shot entry.
+  const shots =
+    scene.screenshots && scene.screenshots.length > 0
+      ? scene.screenshots
+      : scene.screenshot
+        ? [{ url: scene.screenshot, frame: scene.frame }]
+        : [];
+
+  const setShots = (next: typeof shots) => {
+    onChange({
+      ...scene,
+      screenshots: next,
+      // Clear legacy field when migrating
+      screenshot: undefined,
+    });
+  };
+
+  const updateShot = (
+    idx: number,
+    patch: Partial<(typeof shots)[number]>,
+  ) => {
+    setShots(shots.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
+  };
+
+  const removeShot = (idx: number) => {
+    setShots(shots.filter((_, i) => i !== idx));
+  };
+
+  const moveShot = (idx: number, dir: -1 | 1) => {
+    const target = idx + dir;
+    if (target < 0 || target >= shots.length) return;
+    const next = [...shots];
+    [next[idx], next[target]] = [next[target], next[idx]];
+    setShots(next);
+  };
+
+  const [uploadingIdx, setUploadingIdx] = useState<number | "new" | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
+  const [maximizedTarget, setMaximizedTarget] = useState<{
+    idx: number;
+    kind: "zoom" | "frame";
+  } | null>(null);
+
+  useEffect(() => {
+    if (!maximizedTarget) return;
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMaximizedTarget(null);
+    };
+    document.addEventListener("keydown", onEsc);
+    return () => document.removeEventListener("keydown", onEsc);
+  }, [maximizedTarget]);
+
+  const upload = async (
+    file: File,
+    target: { kind: "replace"; idx: number } | { kind: "add" },
+  ) => {
+    setUploadingIdx(target.kind === "add" ? "new" : target.idx);
+    setUploadError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Upload failed: ${res.status}`);
+      }
+      const data = (await res.json()) as { url: string };
+      if (target.kind === "replace") {
+        updateShot(target.idx, { url: data.url });
+      } else {
+        setShots([
+          ...shots,
+          {
+            url: data.url,
+            transitionIn:
+              shots.length === 0 ? "fade" : "slide-left",
+          },
+        ]);
+      }
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploadingIdx(null);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <InputRow label="Caption (optional)">
+        <Field
+          value={scene.caption ?? ""}
+          onChange={(e) =>
+            onChange({ ...scene, caption: e.target.value || undefined })
+          }
+          placeholder="See it in action."
+        />
+      </InputRow>
+
+      <div className="grid grid-cols-2 gap-2">
+        <InputRow label="Default device frame">
+          <Select
+            value={scene.frame ?? "browser"}
+            options={uiShowcaseFrames}
+            onChange={(v) =>
+              onChange({ ...scene, frame: v as typeof scene.frame })
+            }
+          />
+        </InputRow>
+        <InputRow label="URL bar text">
+          <Field
+            value={scene.url ?? ""}
+            onChange={(e) =>
+              onChange({ ...scene, url: e.target.value || undefined })
+            }
+            placeholder="your-product.com"
+          />
+        </InputRow>
+      </div>
+
+      {/* Shot list */}
+      <div>
+        <div className="mb-2 flex items-baseline justify-between">
+          <span className="text-[10px] uppercase tracking-widest text-white/40">
+            Screenshots ({shots.length})
+          </span>
+          <span className="text-[9px] text-white/30">
+            sequence plays in order
+          </span>
+        </div>
+        <div className="space-y-2">
+          {shots.map((shot, idx) => (
+            <div
+              key={idx}
+              className="space-y-2 rounded-lg border border-white/5 bg-white/[0.02] p-2.5"
+            >
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] uppercase tracking-widest text-white/45">
+                  {String(idx + 1).padStart(2, "0")}
+                </span>
+                <input
+                  ref={(el) => {
+                    fileInputs.current[`shot-${idx}`] = el;
+                  }}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) upload(f, { kind: "replace", idx });
+                  }}
+                  className="hidden"
+                />
+                {shot.url ? (
+                  <img
+                    src={shot.url}
+                    alt=""
+                    className="h-10 w-16 shrink-0 cursor-pointer rounded border border-white/10 object-cover"
+                    onClick={() =>
+                      fileInputs.current[`shot-${idx}`]?.click()
+                    }
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).style.opacity =
+                        "0.3";
+                    }}
+                  />
+                ) : (
+                  <div
+                    className="flex h-10 w-16 shrink-0 cursor-pointer items-center justify-center rounded border border-dashed border-white/15 text-[10px] text-white/30"
+                    onClick={() =>
+                      fileInputs.current[`shot-${idx}`]?.click()
+                    }
+                  >
+                    upload
+                  </div>
+                )}
+                <Field
+                  value={shot.label ?? ""}
+                  onChange={(e) =>
+                    updateShot(idx, {
+                      label: e.target.value || undefined,
+                    })
+                  }
+                  placeholder="Label (optional)"
+                />
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    onClick={() => moveShot(idx, -1)}
+                    disabled={idx === 0}
+                    className="text-white/35 transition hover:text-white disabled:opacity-25"
+                    title="Move up"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    onClick={() => moveShot(idx, 1)}
+                    disabled={idx === shots.length - 1}
+                    className="text-white/35 transition hover:text-white disabled:opacity-25"
+                    title="Move down"
+                  >
+                    ↓
+                  </button>
+                  <button
+                    onClick={() => removeShot(idx)}
+                    className="text-white/30 transition hover:text-red-300"
+                    title="Remove"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+
+              {/* Per-shot transition + frame override */}
+              <div className="grid grid-cols-3 gap-1.5">
+                <div>
+                  <div className="text-[9px] uppercase tracking-wider text-white/30">
+                    Enter
+                  </div>
+                  <Select
+                    value={shot.transitionIn ?? "fade"}
+                    options={uiShowcaseTransitions}
+                    onChange={(v) =>
+                      updateShot(idx, {
+                        transitionIn: v as typeof shot.transitionIn,
+                      })
+                    }
+                  />
+                </div>
+                <div>
+                  <div className="text-[9px] uppercase tracking-wider text-white/30">
+                    Frame
+                  </div>
+                  <Select
+                    value={shot.frame ?? scene.frame ?? "browser"}
+                    options={uiShowcaseFrames}
+                    onChange={(v) =>
+                      updateShot(idx, {
+                        frame: v as typeof shot.frame,
+                      })
+                    }
+                  />
+                </div>
+                <div>
+                  <div className="text-[9px] uppercase tracking-wider text-white/30">
+                    Weight
+                  </div>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="5"
+                    value={shot.weight ?? 1}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (Number.isFinite(v)) updateShot(idx, { weight: v });
+                    }}
+                    className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-white outline-none transition focus:border-white/30"
+                  />
+                </div>
+              </div>
+
+              {/* Two click-canvases: zoom target + frame position */}
+              {shot.url ? (
+                <ShotCanvases
+                  shot={shot}
+                  idx={idx}
+                  isMaximizedZoom={
+                    maximizedTarget?.idx === idx &&
+                    maximizedTarget.kind === "zoom"
+                  }
+                  isMaximizedFrame={
+                    maximizedTarget?.idx === idx &&
+                    maximizedTarget.kind === "frame"
+                  }
+                  onMaximize={(kind) => setMaximizedTarget({ idx, kind })}
+                  onCollapse={() => setMaximizedTarget(null)}
+                  onUpdate={(patch) => updateShot(idx, patch)}
+                />
+              ) : null}
+            </div>
+          ))}
+        </div>
+
+        {/* Add screenshot button */}
+        <input
+          ref={(el) => {
+            fileInputs.current[`add`] = el;
+          }}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) upload(f, { kind: "add" });
+          }}
+          className="hidden"
+        />
+        <button
+          onClick={() => fileInputs.current[`add`]?.click()}
+          disabled={uploadingIdx !== null}
+          className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-white/15 px-3 py-2 text-xs text-white/60 transition hover:border-white/30 hover:text-white disabled:opacity-50"
+        >
+          {uploadingIdx === "new" ? "Uploading…" : "+ Add screenshot"}
+        </button>
+
+        {uploadError ? (
+          <div className="mt-1 rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-[10px] text-red-300">
+            {uploadError}
+          </div>
+        ) : null}
+      </div>
+
+      <SfxRow
+        value={scene.sfx}
+        onChange={(v) =>
+          onChange({ ...scene, sfx: v as typeof scene.sfx })
+        }
+      />
+      <InputRow label="Duration (frames)">
+        <NumField
+          value={scene.duration}
+          onChange={(n) => onChange({ ...scene, duration: Math.max(45, n) })}
+        />
+      </InputRow>
+    </div>
+  );
+};
+
+const ProductCarouselEditor: React.FC<{
+  scene: Extract<Scene, { type: "productCarousel" }>;
+  onChange: (next: Scene) => void;
+}> = ({ scene, onChange }) => {
+  const [uploadingIdx, setUploadingIdx] = useState<number | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputs = useRef<Record<number, HTMLInputElement | null>>({});
+
+  const updateProduct = (idx: number, patch: Partial<typeof scene.products[number]>) => {
+    const products = scene.products.map((p, i) =>
+      i === idx ? { ...p, ...patch } : p,
+    );
+    onChange({ ...scene, products });
+  };
+
+  const removeProduct = (idx: number) => {
+    onChange({
+      ...scene,
+      products: scene.products.filter((_, i) => i !== idx),
+    });
+  };
+
+  const addProduct = () => {
+    onChange({
+      ...scene,
+      products: [
+        ...scene.products,
+        {
+          name: "New product",
+          category: "Category",
+          price: "$0",
+          ctaLabel: "View Product",
+        },
+      ],
+    });
+  };
+
+  const handleUpload = async (idx: number, file: File) => {
+    setUploadingIdx(idx);
+    setUploadError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Upload failed: ${res.status}`);
+      }
+      const data = (await res.json()) as { url: string };
+      updateProduct(idx, { image: data.url });
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploadingIdx(null);
+      const input = fileInputs.current[idx];
+      if (input) input.value = "";
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <InputRow label="Heading (optional)">
+        <Field
+          value={scene.heading ?? ""}
+          onChange={(e) =>
+            onChange({ ...scene, heading: e.target.value || undefined })
+          }
+          placeholder="Featured products."
+        />
+      </InputRow>
+
+      <InputRow label="Visual style">
+        <Select
+          value={scene.style ?? "classic"}
+          options={productCarouselStyles}
+          onChange={(v) =>
+            onChange({ ...scene, style: v as typeof scene.style })
+          }
+        />
+      </InputRow>
+
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-[10px] uppercase tracking-widest text-white/40">
+            Products
+          </span>
+          <span className="text-[10px] text-white/30">
+            {scene.products.length} / 8
+          </span>
+        </div>
+        <div className="space-y-2">
+          {scene.products.map((product, idx) => (
+            <div
+              key={idx}
+              className="space-y-2 rounded-lg border border-white/5 bg-white/[0.02] p-2.5"
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-[10px] uppercase tracking-widest text-white/50">
+                  {String(idx + 1).padStart(2, "0")} ·{" "}
+                  {product.featured ? "featured" : "card"}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() =>
+                      updateProduct(idx, { featured: !product.featured })
+                    }
+                    className={`rounded-md px-2 py-0.5 text-[10px] transition ${
+                      product.featured
+                        ? "bg-amber-500/30 text-amber-200"
+                        : "border border-white/10 text-white/50 hover:text-white/80"
+                    }`}
+                    title="Toggle featured (only one should be true)"
+                  >
+                    ★
+                  </button>
+                  <button
+                    onClick={() => removeProduct(idx)}
+                    disabled={scene.products.length <= 2}
+                    className="text-white/30 transition hover:text-red-300 disabled:opacity-30"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+
+              {/* Image upload + preview */}
+              <div className="flex gap-2">
+                <input
+                  ref={(el) => {
+                    fileInputs.current[idx] = el;
+                  }}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleUpload(idx, f);
+                  }}
+                  className="hidden"
+                />
+                {product.image ? (
+                  <img
+                    src={product.image}
+                    alt=""
+                    className="h-12 w-20 shrink-0 rounded object-cover"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).style.display =
+                        "none";
+                    }}
+                  />
+                ) : (
+                  <div
+                    className="flex h-12 w-20 shrink-0 items-center justify-center rounded border border-dashed border-white/15 text-[9px] text-white/30"
+                  >
+                    no image
+                  </div>
+                )}
+                <button
+                  onClick={() => fileInputs.current[idx]?.click()}
+                  disabled={uploadingIdx === idx}
+                  className="flex-1 rounded border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] text-white/70 transition hover:border-white/20 disabled:opacity-50"
+                >
+                  {uploadingIdx === idx
+                    ? "Uploading…"
+                    : product.image
+                      ? "Replace image"
+                      : "Upload image"}
+                </button>
+                {product.image ? (
+                  <button
+                    onClick={() => updateProduct(idx, { image: undefined })}
+                    className="rounded border border-white/10 px-2 py-1 text-[10px] text-white/30 transition hover:border-red-500/30 hover:text-red-300"
+                    title="Remove image"
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </div>
+
+              {/* Name */}
+              <Field
+                value={product.name}
+                onChange={(e) => updateProduct(idx, { name: e.target.value })}
+                placeholder="Product name"
+              />
+
+              {/* Category + accent color */}
+              <div className="flex gap-2">
+                <Field
+                  value={product.category ?? ""}
+                  onChange={(e) =>
+                    updateProduct(idx, {
+                      category: e.target.value || undefined,
+                    })
+                  }
+                  placeholder="Category"
+                />
+                <input
+                  type="color"
+                  value={product.accent ?? "#1E40AF"}
+                  onChange={(e) =>
+                    updateProduct(idx, { accent: e.target.value })
+                  }
+                  className="h-7 w-7 shrink-0 cursor-pointer rounded border-0 bg-transparent"
+                  title="Per-card accent color"
+                />
+              </div>
+
+              {/* Price + SKU */}
+              <div className="grid grid-cols-2 gap-2">
+                <Field
+                  value={product.price ?? ""}
+                  onChange={(e) =>
+                    updateProduct(idx, { price: e.target.value || undefined })
+                  }
+                  placeholder="$49"
+                />
+                <Field
+                  value={product.sku ?? ""}
+                  onChange={(e) =>
+                    updateProduct(idx, { sku: e.target.value || undefined })
+                  }
+                  placeholder="SKU"
+                />
+              </div>
+
+              {/* Rating + reviewCount */}
+              <div className="grid grid-cols-2 gap-2">
+                <Field
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="5"
+                  value={product.rating ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    updateProduct(idx, {
+                      rating: v === "" ? undefined : Number(v),
+                    });
+                  }}
+                  placeholder="Rating 0-5"
+                />
+                <Field
+                  type="number"
+                  min="0"
+                  value={product.reviewCount ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    updateProduct(idx, {
+                      reviewCount: v === "" ? undefined : Number(v),
+                    });
+                  }}
+                  placeholder="Reviews"
+                />
+              </div>
+
+              <Field
+                value={product.ctaLabel ?? ""}
+                onChange={(e) =>
+                  updateProduct(idx, {
+                    ctaLabel: e.target.value || undefined,
+                  })
+                }
+                placeholder="Button label (default: View Product)"
+              />
+            </div>
+          ))}
+        </div>
+        {uploadError ? (
+          <div className="mt-1 rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-[10px] text-red-300">
+            {uploadError}
+          </div>
+        ) : null}
+        <button
+          onClick={addProduct}
+          disabled={scene.products.length >= 8}
+          className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/70 transition hover:border-white/20 disabled:opacity-40"
+        >
+          + Product
+        </button>
+      </div>
+
+      <SfxRow
+        value={scene.sfx}
+        onChange={(v) =>
+          onChange({ ...scene, sfx: v as typeof scene.sfx })
+        }
+      />
+      <InputRow label="Duration (frames)">
+        <NumField
+          value={scene.duration}
+          onChange={(n) => onChange({ ...scene, duration: Math.max(60, n) })}
+        />
+      </InputRow>
+    </div>
+  );
+};
+
 const STAGE_W = 1000;
 const STAGE_H = 600;
 
@@ -1050,7 +2262,11 @@ export const SceneEditor: React.FC<Props> = ({
                         ? "Logo Wall"
                         : scene.type === "ctaCard"
                           ? "CTA Card"
-                          : "Multi-Script"}
+                          : scene.type === "multiScript"
+                            ? "Multi-Script"
+                            : scene.type === "productCarousel"
+                              ? "Product Carousel"
+                              : "UI Showcase"}
           </div>
         </div>
         {onDelete ? (
@@ -1077,12 +2293,16 @@ export const SceneEditor: React.FC<Props> = ({
         <LogoWallEditor scene={scene} onChange={onChange} />
       ) : scene.type === "ctaCard" ? (
         <CTACardEditor scene={scene} onChange={onChange} />
-      ) : (
+      ) : scene.type === "multiScript" ? (
         <div className="rounded-lg border border-white/5 bg-white/[0.02] p-3 text-[11px] text-white/60">
           Multi-script glyph morph — edit via JSON for now (
           {scene.glyphs.length} glyphs ·{" "}
           {scene.glyphs.map((g) => g.char).join(" → ")}).
         </div>
+      ) : scene.type === "productCarousel" ? (
+        <ProductCarouselEditor scene={scene} onChange={onChange} />
+      ) : (
+        <UiShowcaseEditor scene={scene} onChange={onChange} />
       )}
     </div>
   );

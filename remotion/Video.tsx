@@ -15,6 +15,8 @@ import { TestimonialQuote } from "./scenes/TestimonialQuote";
 import { LogoWall } from "./scenes/LogoWall";
 import { CTACard } from "./scenes/CTACard";
 import { MultiScript } from "./scenes/MultiScript";
+import { ProductCarousel } from "./scenes/ProductCarousel";
+import { UiShowcase } from "./scenes/UiShowcase";
 import { sfxUrlFor } from "../lib/sfx";
 import type { Scene, Storyboard } from "./schema";
 
@@ -102,81 +104,115 @@ const renderScene = (
           sceneIndex={sceneIndex}
         />
       );
+    case "productCarousel":
+      return (
+        <ProductCarousel
+          heading={scene.heading}
+          style={scene.style}
+          products={scene.products}
+          brand={brand}
+          sceneIndex={sceneIndex}
+        />
+      );
+    case "uiShowcase":
+      return (
+        <UiShowcase
+          screenshots={scene.screenshots}
+          screenshot={scene.screenshot}
+          frame={scene.frame}
+          layout={scene.layout}
+          direction={scene.direction}
+          animation={scene.animation}
+          caption={scene.caption}
+          url={scene.url}
+          brand={brand}
+          sceneIndex={sceneIndex}
+        />
+      );
   }
 };
 
-// Each scene type exits with its own transition flavor — gives the cut
-// between scenes a sense of intent rather than uniform crossfade.
-const transitionForType = (sceneType: Scene["type"], idx: number) => {
+// Map an explicit transition key (set by user via the edge picker, OR by AI)
+// to a Remotion presentation. Returns null for "cut" so no transition is added.
+const presentationForKey = (key: string) => {
+  switch (key) {
+    case "fade":
+      return fade();
+    case "wipe-up":
+      return wipe({ direction: "from-bottom" });
+    case "wipe-down":
+      return wipe({ direction: "from-top" });
+    case "wipe-left":
+      return wipe({ direction: "from-right" });
+    case "wipe-right":
+      return wipe({ direction: "from-left" });
+    case "slide-up":
+      return slide({ direction: "from-bottom" });
+    case "slide-down":
+      return slide({ direction: "from-top" });
+    case "slide-left":
+      return slide({ direction: "from-right" });
+    case "slide-right":
+      return slide({ direction: "from-left" });
+    default:
+      return fade();
+  }
+};
+
+// Per-scene-type defaults. Used when scene.outTransition is unset or "auto".
+const defaultTransitionForType = (
+  sceneType: Scene["type"],
+): string => {
   switch (sceneType) {
     case "kineticTitle":
-      return (
-        <TransitionSeries.Transition
-          key={`trans-${idx}`}
-          presentation={wipe({ direction: "from-bottom" })}
-          timing={linearTiming({ durationInFrames: 10 })}
-        />
-      );
+      return "wipe-up";
     case "statReveal":
-      return (
-        <TransitionSeries.Transition
-          key={`trans-${idx}`}
-          presentation={slide({ direction: "from-bottom" })}
-          timing={springTiming({
-            config: { damping: 200 },
-            durationInFrames: 14,
-          })}
-        />
-      );
+      return "slide-up";
     case "featureGrid":
-      return (
-        <TransitionSeries.Transition
-          key={`trans-${idx}`}
-          presentation={fade()}
-          timing={linearTiming({ durationInFrames: 10 })}
-        />
-      );
+      return "fade";
     case "productDemo":
-      return (
-        <TransitionSeries.Transition
-          key={`trans-${idx}`}
-          presentation={slide({ direction: "from-right" })}
-          timing={linearTiming({ durationInFrames: 12 })}
-        />
-      );
+      return "slide-left";
     case "testimonialQuote":
-      return (
-        <TransitionSeries.Transition
-          key={`trans-${idx}`}
-          presentation={fade()}
-          timing={linearTiming({ durationInFrames: 14 })}
-        />
-      );
+      return "fade";
     case "logoWall":
-      return (
-        <TransitionSeries.Transition
-          key={`trans-${idx}`}
-          presentation={wipe({ direction: "from-left" })}
-          timing={linearTiming({ durationInFrames: 10 })}
-        />
-      );
+      return "wipe-right";
     case "ctaCard":
-      return (
-        <TransitionSeries.Transition
-          key={`trans-${idx}`}
-          presentation={fade()}
-          timing={linearTiming({ durationInFrames: 10 })}
-        />
-      );
+      return "fade";
     case "multiScript":
-      return (
-        <TransitionSeries.Transition
-          key={`trans-${idx}`}
-          presentation={fade()}
-          timing={linearTiming({ durationInFrames: 18 })}
-        />
-      );
+      return "fade";
+    case "productCarousel":
+      return "slide-left";
+    case "uiShowcase":
+      return "fade";
   }
+};
+
+const transitionForScene = (scene: Scene, idx: number) => {
+  const override = scene.outTransition;
+  // "cut" = no transition at all
+  if (override === "cut") return null;
+  const key =
+    override && override !== "auto"
+      ? override
+      : defaultTransitionForType(scene.type);
+  const durationInFrames = key === "fade" ? 12 : 10;
+  // TS can't unify wipe/slide/fade presentation prop types — cast through
+  // unknown since they're interchangeable at the TransitionSeries call site.
+  const presentation = presentationForKey(key) as ReturnType<typeof fade>;
+  return (
+    <TransitionSeries.Transition
+      key={`trans-${idx}`}
+      presentation={presentation}
+      timing={
+        key.startsWith("slide")
+          ? springTiming({
+              config: { damping: 200 },
+              durationInFrames,
+            })
+          : linearTiming({ durationInFrames })
+      }
+    />
+  );
 };
 
 export const Video: React.FC<{ storyboard: Storyboard }> = ({ storyboard }) => {
@@ -198,7 +234,10 @@ export const Video: React.FC<{ storyboard: Storyboard }> = ({ storyboard }) => {
               </AbsoluteFill>
             </TransitionSeries.Sequence>,
           ];
-          if (!isLast) nodes.push(transitionForType(scene.type, idx));
+          if (!isLast) {
+            const t = transitionForScene(scene, idx);
+            if (t) nodes.push(t);
+          }
           return nodes;
         })}
       </TransitionSeries>

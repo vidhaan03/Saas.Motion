@@ -503,7 +503,11 @@ const GraphCanvas: React.FC<Props> = ({
                                   ? `${scene.heading} · ${scene.logos.length} logos`
                                   : scene.type === "ctaCard"
                                     ? `${scene.headline} → ${scene.buttonLabel}`
-                                    : `${scene.glyphs.map((g) => g.char).join(" → ")} · ${scene.caption ?? ""}`;
+                                    : scene.type === "multiScript"
+                                      ? `${scene.glyphs.map((g) => g.char).join(" → ")} · ${scene.caption ?? ""}`
+                                      : scene.type === "productCarousel"
+                                        ? `${scene.products.length} products · ${scene.heading ?? ""}`
+                                        : `${scene.frame ?? "browser"} · ${scene.caption ?? ""}`;
                     return (
                       <div
                         key={idx}

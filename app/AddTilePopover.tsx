@@ -79,6 +79,22 @@ const TILES: Tile[] = [
     accent: "#FF6A00",
     category: "Cinematic",
   },
+  {
+    type: "productCarousel",
+    name: "Product Carousel",
+    description: "Scrolling product cards with featured center + pagination",
+    icon: "▣",
+    accent: "#1E40AF",
+    category: "Commerce",
+  },
+  {
+    type: "uiShowcase",
+    name: "UI Showcase",
+    description: "Web / phone / tablet frame with your screenshot + animation",
+    icon: "🖥",
+    accent: "#8B5CF6",
+    category: "Product",
+  },
 ];
 
 export const defaultSceneForType = (type: SceneType): Scene => {
@@ -171,6 +187,56 @@ export const defaultSceneForType = (type: SceneType): Scene => {
         ],
         caption: "One platform.",
         sfx: "ding",
+      };
+    case "uiShowcase":
+      return {
+        type: "uiShowcase",
+        duration: 150,
+        frame: "browser",
+        animation: "scroll",
+        caption: "See it in action.",
+        url: "your-product.com",
+        sfx: "whoosh",
+      };
+    case "productCarousel":
+      return {
+        type: "productCarousel",
+        duration: 180,
+        heading: "Featured products.",
+        products: [
+          {
+            name: "PURSHE Mini Projector, Portable HD Display",
+            category: "Electronics",
+            price: "$41.32",
+            rating: 4.3,
+            reviewCount: 61,
+            sku: "BOCRYVL494",
+            ctaLabel: "View Product",
+            accent: "#3B82F6",
+          },
+          {
+            name: "XBOX Wireless Controller — Electric Volt",
+            category: "Gaming",
+            price: "$59.99",
+            rating: 4.8,
+            reviewCount: 1205,
+            sku: "GAMEXCTRL01",
+            ctaLabel: "View Product",
+            featured: true,
+            accent: "#22C55E",
+          },
+          {
+            name: "Polaroid Now i-Type Instant Camera",
+            category: "Photography",
+            price: "$99.99",
+            rating: 4.5,
+            reviewCount: 350,
+            sku: "POLAROIDNOW",
+            ctaLabel: "View Product",
+            accent: "#06B6D4",
+          },
+        ],
+        sfx: "switch",
       };
   }
 };

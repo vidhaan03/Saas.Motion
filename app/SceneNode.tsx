@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Handle,
   NodeToolbar,
   Position,
   type NodeProps,
 } from "@xyflow/react";
+import { Thumbnail } from "@remotion/player";
+import { Video } from "../remotion/Video";
 import type { Brand, Scene, Storyboard } from "../remotion/schema";
 import { SceneEditor } from "./SceneEditor";
 
@@ -71,6 +73,18 @@ const TYPE_META: Record<
     accent: "#FF6A00",
     description: "Cinematic glyph morph across scripts",
   },
+  productCarousel: {
+    label: "Product Carousel",
+    icon: "▣",
+    accent: "#1E40AF",
+    description: "Scrolling product cards with featured highlight",
+  },
+  uiShowcase: {
+    label: "UI Showcase",
+    icon: "🖥",
+    accent: "#8B5CF6",
+    description: "Web/phone frame + uploaded screenshot + animation",
+  },
 };
 
 const sceneSummary = (scene: Scene): string => {
@@ -91,7 +105,63 @@ const sceneSummary = (scene: Scene): string => {
       return `${scene.headline} → ${scene.buttonLabel}`;
     case "multiScript":
       return `${scene.glyphs.map((g) => g.char).join(" → ")} · ${scene.caption ?? ""}`;
+    case "productCarousel":
+      return `${scene.products.length} products · ${scene.heading ?? "Carousel"}`;
+    case "uiShowcase":
+      return `${scene.frame ?? "browser"} · ${scene.animation ?? "scroll"} · ${scene.caption ?? scene.url ?? ""}`;
   }
+};
+
+// Tiny Remotion-rendered preview of a single scene. Renders at the scene's
+// natural 9:16 aspect but masked to a landscape strip via parent overflow,
+// so the node body stays compact.
+const THUMB_W = 232;
+const THUMB_H = 130;
+const ThumbnailStrip: React.FC<{
+  scene: Scene;
+  brand: Storyboard["brand"];
+  meta: { icon: string; accent: string };
+}> = ({ scene, brand, meta }) => {
+  // Memoize the single-scene storyboard so Remotion doesn't re-mount on every
+  // node-graph render (e.g., while dragging another node).
+  const storyboard = useMemo<Storyboard>(
+    () => ({ brand, scenes: [scene] }),
+    [scene, brand],
+  );
+
+  // Pick a frame near the middle of the scene where most animations have
+  // landed but exit fade hasn't started.
+  const frameToDisplay = Math.max(8, Math.floor(scene.duration * 0.45));
+
+  // Vertical canvas (1080x1920) rendered at width=THUMB_W → height = 412.
+  // We center the middle 130px band via marginTop offset.
+  const naturalHeight = (THUMB_W * 1920) / 1080;
+  const yOffset = -(naturalHeight - THUMB_H) / 2;
+
+  return (
+    <div
+      className="relative overflow-hidden rounded-lg"
+      style={{
+        width: THUMB_W,
+        height: THUMB_H,
+        background: "#08080b",
+        boxShadow: `inset 0 0 0 1px ${meta.accent}22`,
+      }}
+    >
+      <div style={{ position: "absolute", top: yOffset, left: 0 }}>
+        <Thumbnail
+          component={Video}
+          compositionWidth={1080}
+          compositionHeight={1920}
+          fps={30}
+          durationInFrames={Math.max(scene.duration, 30)}
+          frameToDisplay={frameToDisplay}
+          inputProps={{ storyboard }}
+          style={{ width: THUMB_W, height: naturalHeight }}
+        />
+      </div>
+    </div>
+  );
 };
 
 export const SceneNode: React.FC<NodeProps> = ({ id, data, selected }) => {
@@ -230,22 +300,14 @@ export const SceneNode: React.FC<NodeProps> = ({ id, data, selected }) => {
           ) : null}
         </div>
 
-        <div className="flex flex-col items-center gap-3 px-6 py-6">
-          <div
-            className="flex h-16 w-16 items-center justify-center rounded-2xl text-2xl font-bold"
-            style={{
-              background: `${meta.accent}1A`,
-              color: meta.accent,
-              boxShadow: `inset 0 0 0 1px ${meta.accent}33`,
-            }}
-          >
-            {meta.icon}
-          </div>
-          <div className="text-center">
-            <div className="text-sm font-semibold text-white">
+        <div className="flex flex-col items-center gap-2 px-3 py-3">
+          {/* Live thumbnail — Remotion-rendered first frame of this scene */}
+          <ThumbnailStrip scene={scene} brand={brand} meta={meta} />
+          <div className="w-full px-2 text-center">
+            <div className="text-[11px] font-semibold uppercase tracking-widest text-white">
               Scene {index + 1}
             </div>
-            <div className="mt-1 line-clamp-2 text-xs text-white/55">
+            <div className="mt-0.5 line-clamp-2 text-[10px] text-white/55">
               {sceneSummary(scene)}
             </div>
           </div>

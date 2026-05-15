@@ -75,6 +75,10 @@ const sceneLabel = (s: Scene) => {
       return `${s.headline} → ${s.buttonLabel}`;
     case "multiScript":
       return `${s.glyphs.map((g) => g.char).join(" → ")} · ${s.caption ?? ""}`;
+    case "productCarousel":
+      return `${s.products.length} products · ${s.heading ?? ""}`;
+    case "uiShowcase":
+      return `${s.frame ?? "browser"} · ${s.caption ?? s.url ?? ""}`;
   }
 };
 
@@ -96,6 +100,10 @@ const sceneIcon = (s: Scene) => {
       return "→";
     case "multiScript":
       return "अ";
+    case "productCarousel":
+      return "▣";
+    case "uiShowcase":
+      return "🖥";
   }
 };
 
@@ -725,7 +733,11 @@ export default function Home() {
                                   ? `${scene.heading} · ${scene.logos.length}`
                                   : scene.type === "ctaCard"
                                     ? `${scene.headline} → ${scene.buttonLabel}`
-                                    : scene.glyphs.map((g) => g.char).join(" → ")}
+                                    : scene.type === "multiScript"
+                                      ? scene.glyphs.map((g) => g.char).join(" → ")
+                                      : scene.type === "productCarousel"
+                                        ? `${scene.products.length} products`
+                                        : `${scene.frame ?? "browser"} showcase`}
                     </span>
                     <span className="font-mono text-[10px] text-[#A39C8F]">
                       {Math.round(scene.duration / 30)}s
