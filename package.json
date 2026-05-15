@@ -5,12 +5,25 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "studio": "remotion studio remotion/index.ts",
+    "render": "remotion render remotion/index.ts Ad out/ad.mp4"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.96.0",
+    "@remotion/bundler": "^4.0.461",
+    "@remotion/cli": "^4.0.461",
+    "@remotion/google-fonts": "^4.0.461",
+    "@remotion/media": "^4.0.461",
+    "@remotion/player": "^4.0.461",
+    "@remotion/sfx": "^4.0.461",
+    "@remotion/transitions": "^4.0.461",
+    "@xyflow/react": "^12.10.2",
     "next": "16.2.6",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "remotion": "^4.0.461",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
