@@ -198,38 +198,55 @@ export const SceneNode: React.FC<NodeProps> = ({ id, data, selected }) => {
 
   return (
     <div className="group relative">
+      {/* Hover toolbar (Play / Run from here) */}
       <div
-        className={`absolute -top-11 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full border bg-[#0a0a0c]/95 px-1.5 py-1 opacity-0 backdrop-blur transition-opacity duration-150 group-hover:opacity-100 ${
-          selected ? "border-white/30" : "border-white/10"
-        }`}
+        className="absolute -top-11 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full border px-1.5 py-1 opacity-0 backdrop-blur transition-opacity duration-150 group-hover:opacity-100"
+        style={{
+          background:
+            "color-mix(in srgb, var(--bg-elev) 90%, transparent)",
+          borderColor: selected
+            ? "color-mix(in srgb, var(--ink) 28%, transparent)"
+            : "color-mix(in srgb, var(--ink) 10%, transparent)",
+        }}
       >
         <button
           type="button"
           title="Play this scene"
-          className="flex h-7 w-7 items-center justify-center rounded-full text-white/60 transition hover:bg-white/10 hover:text-white"
+          className="flex h-7 w-7 items-center justify-center rounded-full transition hover:opacity-100"
+          style={{ color: "var(--ink-muted)" }}
         >
           ▶
         </button>
         <button
           type="button"
           title="Run from here"
-          className="flex h-7 w-7 items-center justify-center rounded-full text-white/60 transition hover:bg-white/10 hover:text-white"
+          className="flex h-7 w-7 items-center justify-center rounded-full transition hover:opacity-100"
+          style={{ color: "var(--ink-muted)" }}
         >
           →
         </button>
       </div>
 
+      {/* Node card */}
       <div
-        className={`w-[280px] overflow-hidden rounded-2xl border bg-[#15151a] shadow-[0_20px_50px_-20px_rgba(0,0,0,0.8)] transition-all ${
-          selected
-            ? "border-white/30 ring-2 ring-white/10"
-            : "border-white/10 hover:border-white/20"
-        }`}
+        className="w-[280px] overflow-hidden rounded-2xl border transition-all"
+        style={{
+          background: "var(--bg-elev)",
+          borderColor: selected
+            ? "color-mix(in srgb, var(--ink) 28%, transparent)"
+            : "color-mix(in srgb, var(--ink) 10%, transparent)",
+          boxShadow: selected
+            ? "var(--shadow), 0 0 0 4px color-mix(in srgb, var(--ink) 6%, transparent)"
+            : "var(--shadow)",
+        }}
       >
+        {/* Header bar — accent tint at top */}
         <div
-          className="relative flex items-center justify-between border-b border-white/5 px-4 py-2.5"
+          className="relative flex items-center justify-between border-b px-4 py-2.5"
           style={{
-            background: `linear-gradient(180deg, ${meta.accent}11 0%, transparent 100%)`,
+            background: `linear-gradient(180deg, ${meta.accent}1A 0%, transparent 100%)`,
+            borderColor:
+              "color-mix(in srgb, var(--ink) 6%, transparent)",
           }}
         >
           <div className="flex items-center gap-2">
@@ -242,20 +259,27 @@ export const SceneNode: React.FC<NodeProps> = ({ id, data, selected }) => {
             >
               {meta.icon}
             </span>
-            <span className="text-[13px] font-medium text-white">
+            <span
+              className="text-[13px] font-medium"
+              style={{ color: "var(--ink)" }}
+            >
               {meta.label}
             </span>
             <button
               type="button"
-              className="ml-0.5 text-white/30 transition hover:text-white/70"
+              className="ml-0.5 transition"
+              style={{ color: "var(--ink-faint)" }}
               title="Edit (or click anywhere on node)"
             >
               ✎
             </button>
           </div>
-          <div className="flex items-center gap-2 text-[10px] text-white/50">
+          <div
+            className="flex items-center gap-2 text-[10px]"
+            style={{ color: "var(--ink-muted)" }}
+          >
             <span className="flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
               Ready
             </span>
             <button
@@ -265,9 +289,13 @@ export const SceneNode: React.FC<NodeProps> = ({ id, data, selected }) => {
                 setMenuOpen((v) => !v);
               }}
               title="More options"
-              className={`flex h-6 w-6 items-center justify-center rounded-md text-white/50 transition hover:bg-white/10 hover:text-white ${
-                menuOpen ? "bg-white/10 text-white" : ""
-              }`}
+              className="flex h-6 w-6 items-center justify-center rounded-md transition"
+              style={{
+                background: menuOpen
+                  ? "color-mix(in srgb, var(--ink) 10%, transparent)"
+                  : "transparent",
+                color: menuOpen ? "var(--ink)" : "var(--ink-muted)",
+              }}
             >
               ⋮
             </button>
@@ -276,22 +304,34 @@ export const SceneNode: React.FC<NodeProps> = ({ id, data, selected }) => {
             <div
               ref={menuRef}
               onMouseDown={(e) => e.stopPropagation()}
-              className="absolute right-2 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-white/10 bg-[#15151a] shadow-[0_20px_50px_-10px_rgba(0,0,0,0.9)]"
+              className="absolute right-2 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border"
+              style={{
+                background: "var(--bg-elev)",
+                borderColor:
+                  "color-mix(in srgb, var(--ink) 12%, transparent)",
+                boxShadow: "var(--shadow)",
+              }}
             >
               {onDuplicate ? (
                 <button
                   type="button"
                   onClick={stopAndDo(() => onDuplicate(id))}
-                  className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs text-white/80 transition hover:bg-white/[0.06]"
+                  className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition hover:opacity-80"
+                  style={{ color: "var(--ink)" }}
                 >
-                  <span className="text-white/40">⎘</span>
+                  <span style={{ color: "var(--ink-faint)" }}>⎘</span>
                   Duplicate
                 </button>
               ) : null}
               <button
                 type="button"
                 onClick={stopAndDo(() => onDelete(id))}
-                className="flex w-full items-center gap-2.5 border-t border-white/5 px-3 py-2 text-left text-xs text-red-300 transition hover:bg-red-500/10"
+                className="flex w-full items-center gap-2.5 border-t px-3 py-2 text-left text-xs transition hover:bg-red-500/10"
+                style={{
+                  borderColor:
+                    "color-mix(in srgb, var(--ink) 6%, transparent)",
+                  color: "#a83a2c",
+                }}
               >
                 <span>🗑</span>
                 Delete node
@@ -304,39 +344,70 @@ export const SceneNode: React.FC<NodeProps> = ({ id, data, selected }) => {
           {/* Live thumbnail — Remotion-rendered first frame of this scene */}
           <ThumbnailStrip scene={scene} brand={brand} meta={meta} />
           <div className="w-full px-2 text-center">
-            <div className="text-[11px] font-semibold uppercase tracking-widest text-white">
+            <div
+              className="text-[11px] font-semibold uppercase tracking-widest"
+              style={{ color: "var(--ink)" }}
+            >
               Scene {index + 1}
             </div>
-            <div className="mt-0.5 line-clamp-2 text-[10px] text-white/55">
+            <div
+              className="mt-0.5 line-clamp-2 text-[10px]"
+              style={{ color: "var(--ink-muted)" }}
+            >
               {sceneSummary(scene)}
             </div>
           </div>
         </div>
 
         <div
-          className="flex items-center justify-between border-t border-white/5 px-4 py-2"
-          style={{ background: "rgba(255,255,255,0.015)" }}
+          className="flex items-center justify-between border-t px-4 py-2"
+          style={{
+            background:
+              "color-mix(in srgb, var(--ink) 3%, transparent)",
+            borderColor:
+              "color-mix(in srgb, var(--ink) 6%, transparent)",
+          }}
         >
           <div className="flex items-center gap-2">
             <span
               className="h-2 w-2 rounded-full"
               style={{ background: brand.accent }}
             />
-            <span className="text-[10px] text-white/40">{brand.name}</span>
+            <span
+              className="text-[10px]"
+              style={{ color: "var(--ink-faint)" }}
+            >
+              {brand.name}
+            </span>
           </div>
-          <span className="text-[10px] text-white/40">{seconds}s</span>
+          <span
+            className="text-[10px]"
+            style={{ color: "var(--ink-faint)" }}
+          >
+            {seconds}s
+          </span>
         </div>
       </div>
 
       <Handle
         type="target"
         position={Position.Left}
-        className="!h-3 !w-3 !border-2 !border-white/20 !bg-[#0a0a0c]"
+        className="!h-3 !w-3 !border-2"
+        style={{
+          background: "var(--bg-elev)",
+          borderColor:
+            "color-mix(in srgb, var(--ink) 25%, transparent)",
+        }}
       />
       <Handle
         type="source"
         position={Position.Right}
-        className="!h-3 !w-3 !border-2 !border-white/20 !bg-[#0a0a0c]"
+        className="!h-3 !w-3 !border-2"
+        style={{
+          background: "var(--bg-elev)",
+          borderColor:
+            "color-mix(in srgb, var(--ink) 25%, transparent)",
+        }}
       />
 
       {onChange ? (
@@ -349,7 +420,13 @@ export const SceneNode: React.FC<NodeProps> = ({ id, data, selected }) => {
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
-            className="nodrag w-[340px] max-h-[520px] overflow-y-auto rounded-xl border border-white/15 bg-[#0c0c10]/95 p-4 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.9)] backdrop-blur-xl"
+            className="nodrag w-[640px] max-w-[90vw] max-h-[85vh] overflow-y-auto rounded-2xl border border-white/15 bg-[#0c0c10]/95 p-6 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.9)] backdrop-blur-xl"
+            style={{
+              // SceneEditor is designed for a dark surface (white text on dark).
+              // Force dark regardless of the surrounding theme so labels stay
+              // readable when the rest of the graph chrome is cream.
+              colorScheme: "dark",
+            }}
           >
             <SceneEditor
               scene={scene}

@@ -47,8 +47,9 @@ export type StreamSource =
   | "gemini"
   | "nim-gemma"
   | "nim-llama"
-  | "agentic-nim" // director + specialists, all on NIM Gemma
-  | "agentic-mixed"; // some agents fell back to Gemini
+  | "agentic-nim" // director + specialists, all on NIM (fallback path)
+  | "agentic-gemini" // director + specialists, all on Gemini (primary path)
+  | "agentic-mixed"; // some agents on Gemini, others on NIM
 
 export type AgentEvent =
   | {
@@ -193,7 +194,9 @@ const callGeminiChat = async (
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
 
-  const model = process.env.GEMINI_MODEL ?? "gemini-3-flash-preview";
+  // Fast default — Flash Lite at ~2.3s/call is now the primary text model.
+  // Override via env if you want full Flash or Pro.
+  const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite";
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   const res = await fetch(endpoint, {
@@ -218,36 +221,77 @@ const callGeminiChat = async (
   }
 
   const data = (await res.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    candidates?: Array<{
+      content?: { parts?: Array<{ text?: string }> };
+      finishReason?: string;
+    }>;
+    promptFeedback?: { blockReason?: string };
   };
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
+  const candidate = data.candidates?.[0];
+  const text = candidate?.content?.parts?.[0]?.text ?? null;
+  // Surface unusual finishReasons so we can tell short-output cases from
+  // safety blocks from token-limit truncation. "STOP" is the normal case.
+  if (candidate?.finishReason && candidate.finishReason !== "STOP") {
+    console.warn(
+      `[gemini] finishReason=${candidate.finishReason} (textLen=${text?.length ?? 0})`,
+    );
+  }
+  if (data.promptFeedback?.blockReason) {
+    console.warn(
+      `[gemini] promptFeedback.blockReason=${data.promptFeedback.blockReason}`,
+    );
+  }
+  return text;
 };
 
-// One agent call. Tries NIM Gemma first, falls back to Gemini. Returns the
-// raw text and which provider answered. Returns null when both fail.
+// One agent call. Tries NIM first (no free-tier daily quota, ~5s/call),
+// falls back to Gemini if NIM errors. Source key "nim-gemma" is kept for
+// back-compat with the UI label map; it's just whichever NIM model is
+// configured.
+//
+// Older order (Gemini → NIM) was hitting Gemini's 1500 req/day free-tier
+// quota; with 1 director + 5 specialists per generation that cap is
+// reached in ~250 generations, after which every call 429s.
 type AgentSource = "nim-gemma" | "gemini";
 const agentCall = async (
   system: string,
   user: string,
   maxTokens: number,
 ): Promise<{ text: string; source: AgentSource } | null> => {
-  const gemmaModel = process.env.NVIDIA_NIM_MODEL ?? "google/gemma-4-31b-it";
+  const nimModel =
+    process.env.NVIDIA_NIM_MODEL ?? "meta/llama-4-maverick-17b-128e-instruct";
 
+  // 1) Primary: NIM
   try {
-    const text = await callNvidiaChat(gemmaModel, system, user, maxTokens);
+    const text = await callNvidiaChat(nimModel, system, user, maxTokens);
     if (text && text.trim()) return { text, source: "nim-gemma" };
-  } catch {
-    // fall through to Gemini
+    console.warn(
+      `[agent] NIM (${nimModel}) returned empty text — falling through to Gemini`,
+    );
+  } catch (e) {
+    console.warn(
+      `[agent] NIM (${nimModel}) failed — falling through to Gemini:`,
+      e instanceof Error ? e.message : String(e),
+    );
   }
 
+  // 2) Fallback: Gemini (fast, but capped by daily free-tier quota)
   try {
     const text = await callGeminiChat(system, user, maxTokens);
     if (text && text.trim()) return { text, source: "gemini" };
-  } catch {
-    return null;
+    console.warn("[agent] Gemini returned empty text");
+  } catch (e) {
+    console.warn(
+      "[agent] Gemini failed:",
+      e instanceof Error ? e.message : String(e),
+    );
   }
 
   return null;
+
+  // Older order (NIM → Gemini):
+  // try { const text = await callNvidiaChat(...); if (text) return {text, source:"nim-gemma"}; } catch {}
+  // try { const text = await callGeminiChat(...); if (text) return {text, source:"gemini"}; } catch { return null; }
 };
 
 // ───────── Director agent (1 call) ─────────
@@ -303,26 +347,59 @@ ${prompt}
 
 Produce the plan JSON now.`;
 
-  // 5-scene plan JSON is ~250 tokens; 400 leaves headroom without making
-  // the model think it has space to ramble.
-  const out = await agentCall(DIRECTOR_SYSTEM, user, 400);
-  if (!out) return null;
+  // Gemini 2.5 Flash Lite counts internal "thinking" tokens against the
+  // same budget as output, so a tight cap (400) leaves only a handful of
+  // chars for the actual JSON. 2000 is comfortable for any plan size.
+  const out = await agentCall(DIRECTOR_SYSTEM, user, 2000);
+  if (!out) {
+    console.warn("[director] agentCall returned null — both providers failed");
+    return null;
+  }
+
+  console.warn(
+    `[director] got ${out.source} response (${out.text.length} chars):`,
+    out.text.slice(0, 240).replace(/\s+/g, " "),
+  );
 
   const parsed = tryParseJson(out.text) as { plan?: unknown } | null;
-  if (!parsed || !Array.isArray(parsed.plan)) return null;
+  if (!parsed) {
+    console.warn(
+      "[director] tryParseJson FAILED on response. Raw:",
+      out.text.slice(0, 500),
+    );
+    return null;
+  }
+  if (!Array.isArray(parsed.plan)) {
+    console.warn(
+      "[director] response had no 'plan' array. Keys:",
+      Object.keys(parsed as object),
+    );
+    return null;
+  }
 
   const validTypes = new Set<Scene["type"]>(ALL_SCENE_TYPES);
   const plan: ScenePlan[] = [];
+  let droppedReasons: string[] = [];
 
   for (const item of parsed.plan) {
-    if (typeof item !== "object" || item === null) continue;
+    if (typeof item !== "object" || item === null) {
+      droppedReasons.push("non-object");
+      continue;
+    }
     const i = item as Record<string, unknown>;
     if (typeof i.type !== "string" || !validTypes.has(i.type as Scene["type"])) {
+      droppedReasons.push(`bad-type:${String(i.type)}`);
       continue;
     }
     const dur = typeof i.duration === "number" ? i.duration : NaN;
-    if (!Number.isFinite(dur)) continue;
-    if (typeof i.brief !== "string") continue;
+    if (!Number.isFinite(dur)) {
+      droppedReasons.push(`bad-duration:${i.type}`);
+      continue;
+    }
+    if (typeof i.brief !== "string") {
+      droppedReasons.push(`bad-brief:${i.type}`);
+      continue;
+    }
     plan.push({
       type: i.type as Scene["type"],
       duration: Math.round(Math.max(30, Math.min(300, dur))),
@@ -330,7 +407,16 @@ Produce the plan JSON now.`;
     });
   }
 
-  if (plan.length === 0) return null;
+  if (plan.length === 0) {
+    console.warn(
+      `[director] all ${parsed.plan.length} plan items dropped:`,
+      droppedReasons.join(", "),
+    );
+    return null;
+  }
+  console.warn(
+    `[director] OK — ${plan.length} scenes planned via ${out.source}: ${plan.map((p) => p.type).join(" → ")}`,
+  );
   return { plan, source: out.source };
 };
 
@@ -398,7 +484,9 @@ Brief: ${plan.brief}
 
 Produce the scene JSON now.`;
 
-  const out = await agentCall(system, user, 700);
+  // 2500 leaves headroom for Gemini 2.5 Flash Lite's thinking + a full
+  // scene (e.g. productCarousel with 5 products) on the same budget.
+  const out = await agentCall(system, user, 2500);
   if (!out) return null;
 
   const parsed = tryParseJson(out.text);
@@ -461,9 +549,10 @@ export async function* streamStoryboard(
     source: directorResult.source,
   };
 
-  // Tentative source — flipped to "agentic-mixed" if any specialist diverges.
+  // Tentative meta source from director. Flipped to "agentic-mixed" later
+  // if a specialist answers from a different provider.
   let metaSource: StreamSource =
-    directorResult.source === "gemini" ? "agentic-mixed" : "agentic-nim";
+    directorResult.source === "gemini" ? "agentic-gemini" : "agentic-nim";
 
   yield { type: "meta", source: metaSource, total: plan.length };
 
@@ -534,8 +623,8 @@ export async function* streamStoryboard(
     // null result → specialist failed → scene dropped per agreed policy.
   }
 
-  // Mixed-source telemetry (informational; consumers can re-render the badge).
-  if (sawGemma && sawGemini && metaSource !== "agentic-mixed") {
+  // Mixed-source telemetry — both providers contributed to this storyboard.
+  if (sawGemma && sawGemini) {
     metaSource = "agentic-mixed";
   }
 

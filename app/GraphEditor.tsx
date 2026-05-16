@@ -49,7 +49,7 @@ const buildInitialGraph = (storyboard: Storyboard, onDelete: (id: string) => voi
     source: nodes[idx].id,
     target: nodes[idx + 1].id,
     animated: true,
-    style: { stroke: "rgba(255,255,255,0.4)", strokeWidth: 1.5 },
+    style: { stroke: "var(--ink-faint)", strokeWidth: 1.5, opacity: 0.65 },
   }));
   return { nodes, edges };
 };
@@ -66,7 +66,7 @@ const rewireEdgesByPosition = (nodes: Node[]): Edge[] => {
     source: sorted[idx].id,
     target: node.id,
     animated: true,
-    style: { stroke: "rgba(255,255,255,0.4)", strokeWidth: 1.5 },
+    style: { stroke: "var(--ink-faint)", strokeWidth: 1.5, opacity: 0.65 },
   }));
 };
 
@@ -234,7 +234,7 @@ const GraphCanvas: React.FC<Props> = ({
           source: lastNode.id,
           target: id,
           animated: true,
-          style: { stroke: "rgba(255,255,255,0.4)", strokeWidth: 1.5 },
+          style: { stroke: "var(--ink-faint)", strokeWidth: 1.5, opacity: 0.65 },
         },
       ]);
     }
@@ -258,7 +258,7 @@ const GraphCanvas: React.FC<Props> = ({
           {
             ...connection,
             animated: true,
-            style: { stroke: "rgba(255,255,255,0.4)", strokeWidth: 1.5 },
+            style: { stroke: "var(--ink-faint)", strokeWidth: 1.5, opacity: 0.65 },
           },
           eds,
         ),
@@ -323,39 +323,76 @@ const GraphCanvas: React.FC<Props> = ({
   const sceneCount = nodes.length;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[#06060a]">
-      <header className="flex items-center justify-between border-b border-white/5 bg-[#0a0a0c]/80 px-6 py-3 backdrop-blur">
+    <div
+      className="fixed inset-0 z-50 flex flex-col"
+      style={{ background: "var(--bg)", color: "var(--ink)" }}
+    >
+      {/* Atmospheric backdrop layer */}
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(ellipse at 15% 0%, color-mix(in srgb, var(--accent) 12%, transparent) 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, color-mix(in srgb, var(--accent) 16%, transparent) 0%, transparent 55%)",
+        }}
+      />
+      <header
+        className="relative z-10 flex items-center justify-between border-b px-6 py-3 backdrop-blur"
+        style={{
+          background:
+            "color-mix(in srgb, var(--bg-elev) 75%, transparent)",
+          borderColor:
+            "color-mix(in srgb, var(--ink) 8%, transparent)",
+        }}
+      >
         <div className="flex items-center gap-3">
           <button
             onClick={onClose}
-            className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-white/60 transition hover:border-white/20 hover:text-white"
+            className="rounded-lg border px-3 py-1.5 text-xs transition hover:opacity-80"
+            style={{
+              borderColor:
+                "color-mix(in srgb, var(--ink) 12%, transparent)",
+              color: "var(--ink-muted)",
+            }}
           >
             ← Back
           </button>
           <div>
-            <div className="text-xs uppercase tracking-[0.2em] text-white/40">
+            <div
+              className="text-xs uppercase tracking-[0.2em]"
+              style={{ color: "var(--ink-faint)" }}
+            >
               Storyboard Graph
             </div>
-            <div className="text-sm font-medium text-white">
+            <div
+              className="text-sm font-medium"
+              style={{ color: "var(--ink)" }}
+            >
               {storyboard.brand.name} · {sceneCount} scenes
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="text-[11px] text-white/40">
+        <div className="flex items-center gap-3">
+          <div
+            className="text-[11px]"
+            style={{ color: "var(--ink-faint)" }}
+          >
             Drag handles to reconnect · Hover node for actions
           </div>
           <button
             onClick={apply}
             disabled={sceneCount === 0}
-            className="rounded-lg bg-white px-4 py-1.5 text-xs font-semibold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-full px-4 py-1.5 text-xs font-semibold transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30"
+            style={{
+              background: "var(--ink)",
+              color: "var(--bg)",
+            }}
           >
             Apply ({sceneCount})
           </button>
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative z-10 flex flex-1 overflow-hidden">
         <div className="relative flex-1">
           <button
             onClick={(e) => {
@@ -364,7 +401,15 @@ const GraphCanvas: React.FC<Props> = ({
               ).getBoundingClientRect();
               setPopoverAnchor({ x: rect.left, y: rect.bottom + 8 });
             }}
-            className="absolute left-4 top-4 z-20 flex items-center gap-2 rounded-full border border-white/15 bg-[#15151a]/95 px-4 py-2 text-xs font-semibold text-white shadow-lg backdrop-blur-xl transition hover:border-white/30 hover:bg-[#1d1d23]/95"
+            className="absolute left-4 top-4 z-20 flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-semibold shadow-lg backdrop-blur-xl transition hover:opacity-90"
+            style={{
+              background:
+                "color-mix(in srgb, var(--bg-elev) 90%, transparent)",
+              borderColor:
+                "color-mix(in srgb, var(--ink) 12%, transparent)",
+              color: "var(--ink)",
+              boxShadow: "var(--shadow)",
+            }}
           >
             <span className="text-base leading-none">+</span>
             <span>Add tile</span>
@@ -395,7 +440,11 @@ const GraphCanvas: React.FC<Props> = ({
             fitViewOptions={{ padding: 0.3 }}
             defaultEdgeOptions={{
               animated: true,
-              style: { stroke: "rgba(255,255,255,0.4)", strokeWidth: 1.5 },
+              style: {
+                stroke: "var(--ink-faint)",
+                strokeWidth: 1.5,
+                opacity: 0.6,
+              },
             }}
             minZoom={0.3}
             maxZoom={1.5}
@@ -405,40 +454,75 @@ const GraphCanvas: React.FC<Props> = ({
               variant={BackgroundVariant.Dots}
               gap={20}
               size={1.2}
-              color="rgba(255,255,255,0.08)"
+              // CSS var won't work in React Flow's canvas-painted background;
+              // pick a value that reads well in both modes via low alpha on
+              // the dominant ink colour.
+              color="var(--ink-faint)"
             />
             <Controls
               position="bottom-right"
-              className="!border-white/10 !bg-[#0a0a0c]/80 !text-white"
+              className="!rounded-lg !border-0 !bg-transparent"
+              style={{
+                background:
+                  "color-mix(in srgb, var(--bg-elev) 80%, transparent)",
+                borderColor:
+                  "color-mix(in srgb, var(--ink) 10%, transparent)",
+                color: "var(--ink)",
+              }}
               showInteractive={false}
             />
           </ReactFlow>
         </div>
 
         <aside
-          className="relative flex shrink-0 flex-col gap-4 border-l border-white/5 bg-[#0a0a0c]/80 p-4"
-          style={{ width: sidebarWidth }}
+          className="relative flex shrink-0 flex-col gap-4 border-l p-4 backdrop-blur-xl"
+          style={{
+            width: sidebarWidth,
+            background:
+              "color-mix(in srgb, var(--bg-elev) 75%, transparent)",
+            borderColor:
+              "color-mix(in srgb, var(--ink) 8%, transparent)",
+          }}
         >
           <div
             onPointerDown={startResize}
             className="group absolute -left-1 top-0 z-10 flex h-full w-2 cursor-col-resize items-center justify-center"
             title="Drag to resize"
           >
-            <div className="h-full w-px bg-white/5 transition group-hover:w-[2px] group-hover:bg-white/30" />
+            <div
+              className="h-full w-px transition group-hover:w-[2px]"
+              style={{
+                background:
+                  "color-mix(in srgb, var(--ink) 8%, transparent)",
+              }}
+            />
           </div>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-              <span className="text-xs uppercase tracking-widest text-white/50">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+              <span
+                className="text-xs uppercase tracking-widest"
+                style={{ color: "var(--ink-muted)" }}
+              >
                 Live preview
               </span>
             </div>
-            <span className="text-[10px] text-white/40">
+            <span
+              className="text-[10px]"
+              style={{ color: "var(--ink-faint)" }}
+            >
               {sceneCount} scenes · {previewSeconds}s
             </span>
           </div>
 
-          <div className="mx-auto w-full max-w-[300px] rounded-2xl border border-white/5 bg-black/40 p-2">
+          {/* Preview card — keep frame dark always (video itself is dark) */}
+          <div
+            className="mx-auto w-full max-w-[300px] rounded-2xl border p-2"
+            style={{
+              background: "var(--player-frame)",
+              borderColor: "var(--player-frame-rule)",
+            }}
+          >
             {previewStoryboard ? (
               <PlayerWrapper
                 key={previewKey}
@@ -468,22 +552,44 @@ const GraphCanvas: React.FC<Props> = ({
 
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
             {selectedScene && selectedNodeId ? (
-              <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-[11px] text-white/55">
-                <div className="mb-1 font-mono text-[9px] uppercase tracking-widest text-white/30">
+              <div
+                className="rounded-lg border p-3 text-[11px]"
+                style={{
+                  background:
+                    "color-mix(in srgb, var(--ink) 4%, transparent)",
+                  borderColor:
+                    "color-mix(in srgb, var(--ink) 10%, transparent)",
+                  color: "var(--ink-muted)",
+                }}
+              >
+                <div
+                  className="mb-1 font-mono text-[9px] uppercase tracking-widest"
+                  style={{ color: "var(--ink-faint)" }}
+                >
                   Editing
                 </div>
-                <div className="text-white/80">
+                <div style={{ color: "var(--ink)" }}>
                   Editor floats next to the selected node on the canvas. Click
                   the canvas background to dismiss.
                 </div>
               </div>
             ) : (
               <div className="space-y-1 text-[11px]">
-                <div className="mb-2 text-[10px] uppercase tracking-widest text-white/40">
+                <div
+                  className="mb-2 text-[10px] uppercase tracking-widest"
+                  style={{ color: "var(--ink-faint)" }}
+                >
                   Order
                 </div>
                 {orderedScenes.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-white/10 p-3 text-center text-white/40">
+                  <div
+                    className="rounded-lg border border-dashed p-3 text-center"
+                    style={{
+                      borderColor:
+                        "color-mix(in srgb, var(--ink) 14%, transparent)",
+                      color: "var(--ink-faint)",
+                    }}
+                  >
                     Click "Add tile" to start, or drop nodes into a chain.
                   </div>
                 ) : (
@@ -511,7 +617,13 @@ const GraphCanvas: React.FC<Props> = ({
                     return (
                       <div
                         key={idx}
-                        className="flex items-center gap-2 rounded-lg border border-white/5 bg-white/[0.02] px-2.5 py-1.5"
+                        className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5"
+                        style={{
+                          background:
+                            "color-mix(in srgb, var(--ink) 3%, transparent)",
+                          borderColor:
+                            "color-mix(in srgb, var(--ink) 8%, transparent)",
+                        }}
                       >
                         <span
                           className="flex h-5 w-5 items-center justify-center rounded font-mono text-[9px]"
@@ -522,17 +634,23 @@ const GraphCanvas: React.FC<Props> = ({
                         >
                           {idx + 1}
                         </span>
-                        <span className="flex-1 truncate text-white/75">
+                        <span
+                          className="flex-1 truncate"
+                          style={{ color: "var(--ink)" }}
+                        >
                           {label}
                         </span>
-                        <span className="text-white/30">
+                        <span style={{ color: "var(--ink-faint)" }}>
                           {Math.round(scene.duration / 30)}s
                         </span>
                       </div>
                     );
                   })
                 )}
-                <div className="mt-3 text-[10px] text-white/30">
+                <div
+                  className="mt-3 text-[10px]"
+                  style={{ color: "var(--ink-faint)" }}
+                >
                   Click any node on the canvas to edit it.
                 </div>
               </div>

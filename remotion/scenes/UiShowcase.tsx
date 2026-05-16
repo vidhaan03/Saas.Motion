@@ -1,6 +1,7 @@
 import {
   AbsoluteFill,
   Img,
+  OffthreadVideo,
   interpolate,
   useCurrentFrame,
   useVideoConfig,
@@ -24,13 +25,51 @@ const { fontFamily } = loadFont("normal", {
   subsets: ["latin"],
 });
 
+type ShotPan = {
+  from: { x: number; y: number; scale: number };
+  to: { x: number; y: number; scale: number };
+};
+type ShotSpotlight = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  intensity?: number;
+  appearAt?: number;
+};
+type ShotAnnotation = {
+  x: number;
+  y: number;
+  text: string;
+  side?: "top" | "right" | "bottom" | "left";
+  appearAt?: number;
+  color?: string;
+};
+type ShotCursorAction = {
+  at: number;
+  type: "move" | "click" | "zoom";
+  x: number;
+  y: number;
+  label?: string;
+  scale?: number;
+};
+type ShotCursor = {
+  actions: ShotCursorAction[];
+};
+
 type Shot = {
   url: string;
   label?: string;
   frame?: UiShowcaseFrame;
   transitionIn?: UiShowcaseTransition;
+  mediaType?: "image" | "video";
+  shotCaption?: string;
   zoom?: { x: number; y: number; scale: number };
+  pan?: ShotPan;
   framePosition?: { x: number; y: number; scale: number };
+  spotlight?: ShotSpotlight;
+  annotations?: ShotAnnotation[];
+  cursor?: ShotCursor;
   weight?: number;
 };
 
@@ -309,6 +348,306 @@ const enterTransform = (
   return { tx: 0, ty: 0, scale: 1, opacity: t };
 };
 
+// ───────── Overlay helpers (spotlight, annotations, cursor, caption) ─────────
+
+// Spotlight: dims the whole screenshot except a rectangular cutout.
+// Uses CSS box-shadow trick to avoid clip-path performance issues.
+const SpotlightOverlay: React.FC<{
+  rect: ShotSpotlight;
+  segProgress: number;
+}> = ({ rect, segProgress }) => {
+  const appearAt = rect.appearAt ?? 0;
+  const fadeIn = interpolate(
+    segProgress,
+    [appearAt, Math.min(1, appearAt + 0.08)],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
+  const dim = (rect.intensity ?? 0.55) * fadeIn;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: `${rect.x}%`,
+        top: `${rect.y}%`,
+        width: `${rect.w}%`,
+        height: `${rect.h}%`,
+        // Massive outward shadow does the "dim everything but this rect" trick
+        boxShadow: `0 0 0 9999px rgba(0,0,0,${dim})`,
+        borderRadius: 6,
+        pointerEvents: "none",
+        // Soft outline around the highlighted area
+        border: `1px solid rgba(255,255,255,${0.25 * fadeIn})`,
+        boxSizing: "border-box",
+      }}
+    />
+  );
+};
+
+// Annotation pin: a dot at (x, y) with a label flag sticking out in `side`.
+const AnnotationPin: React.FC<{
+  ann: ShotAnnotation;
+  segProgress: number;
+}> = ({ ann, segProgress }) => {
+  const appearAt = ann.appearAt ?? 0;
+  const t = interpolate(
+    segProgress,
+    [appearAt, Math.min(1, appearAt + 0.1)],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: ease.expoOut },
+  );
+  const color = ann.color ?? "#FBBF24";
+  const side = ann.side ?? "top";
+  // Label offset relative to the pin
+  const offsetMap: Record<string, { dx: number; dy: number; align: string }> = {
+    top: { dx: 0, dy: -36, align: "center" },
+    bottom: { dx: 0, dy: 36, align: "center" },
+    left: { dx: -10, dy: 0, align: "flex-end" },
+    right: { dx: 10, dy: 0, align: "flex-start" },
+  };
+  const off = offsetMap[side];
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: `${ann.x}%`,
+        top: `${ann.y}%`,
+        transform: `translate(-50%, -50%) scale(${t})`,
+        opacity: t,
+        pointerEvents: "none",
+      }}
+    >
+      {/* Dot */}
+      <div
+        style={{
+          width: 12,
+          height: 12,
+          borderRadius: "50%",
+          background: color,
+          boxShadow: `0 0 0 4px ${color}33, 0 0 0 8px ${color}1A`,
+        }}
+      />
+      {/* Label */}
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: "50%",
+          transform: `translate(calc(-50% + ${off.dx}px), calc(-50% + ${off.dy}px))`,
+          display: "flex",
+          justifyContent: off.align,
+          whiteSpace: "nowrap",
+          fontFamily,
+          fontWeight: 600,
+          fontSize: 13,
+          color: "#fff",
+          background: "rgba(0,0,0,0.7)",
+          backdropFilter: "blur(8px)",
+          padding: "4px 10px",
+          borderRadius: 6,
+          letterSpacing: "0.01em",
+        }}
+      >
+        {ann.text}
+      </div>
+    </div>
+  );
+};
+
+// Cursor state computation — finds where the cursor is right now given
+// the action list and current progress (0..1).
+type CursorState = {
+  x: number;
+  y: number;
+  clickPulse: number; // 0..1, briefly spikes around click actions
+  hotspotLabel?: string;
+};
+const computeCursorState = (
+  actions: ShotCursorAction[],
+  progress: number,
+): CursorState => {
+  if (actions.length === 0) {
+    return { x: 50, y: 50, clickPulse: 0 };
+  }
+  const sorted = [...actions].sort((a, b) => a.at - b.at);
+
+  let x: number;
+  let y: number;
+  let label: string | undefined;
+  if (progress <= sorted[0].at) {
+    x = sorted[0].x;
+    y = sorted[0].y;
+    label = sorted[0].label;
+  } else if (progress >= sorted[sorted.length - 1].at) {
+    const last = sorted[sorted.length - 1];
+    x = last.x;
+    y = last.y;
+    label = last.label;
+  } else {
+    let a = sorted[0];
+    let b = sorted[sorted.length - 1];
+    for (let i = 0; i < sorted.length - 1; i++) {
+      if (progress >= sorted[i].at && progress < sorted[i + 1].at) {
+        a = sorted[i];
+        b = sorted[i + 1];
+        break;
+      }
+    }
+    const range = Math.max(0.001, b.at - a.at);
+    const t = (progress - a.at) / range;
+    // Ease so the cursor decelerates into each hotspot
+    const eased =
+      t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    x = a.x + (b.x - a.x) * eased;
+    y = a.y + (b.y - a.y) * eased;
+    label = t > 0.85 ? b.label : t < 0.15 ? a.label : undefined;
+  }
+
+  // Click pulse: peak when progress is right on a click action
+  let clickPulse = 0;
+  for (const action of sorted) {
+    if (action.type !== "click" && action.type !== "zoom") continue;
+    const d = Math.abs(progress - action.at);
+    if (d < 0.05) {
+      clickPulse = Math.max(clickPulse, 1 - d / 0.05);
+    }
+  }
+  return { x, y, clickPulse, hotspotLabel: label };
+};
+
+// Cursor + click rings overlay
+const CursorOverlay: React.FC<{
+  state: CursorState;
+  actions: ShotCursorAction[];
+  segProgress: number;
+  accent: string;
+}> = ({ state, actions, segProgress, accent }) => {
+  // Render an expanding ring for each click action that's "near" the
+  // current progress. Ring scales 0 → 1.8× and fades out.
+  const clickRings = actions
+    .filter((a) => a.type === "click" || a.type === "zoom")
+    .map((a, i) => {
+      const delta = segProgress - a.at;
+      if (delta < -0.005 || delta > 0.18) return null;
+      const t = Math.max(0, Math.min(1, delta / 0.18));
+      const ringScale = interpolate(t, [0, 1], [0.4, 1.8]);
+      const ringOpacity = interpolate(t, [0, 0.2, 1], [0, 0.7, 0]);
+      return (
+        <div
+          key={`ring-${i}`}
+          style={{
+            position: "absolute",
+            left: `${a.x}%`,
+            top: `${a.y}%`,
+            width: 48,
+            height: 48,
+            borderRadius: "50%",
+            border: `2px solid ${accent}`,
+            transform: `translate(-50%, -50%) scale(${ringScale})`,
+            opacity: ringOpacity,
+            pointerEvents: "none",
+          }}
+        />
+      );
+    });
+
+  return (
+    <>
+      {clickRings}
+      {/* Cursor itself */}
+      <div
+        style={{
+          position: "absolute",
+          left: `${state.x}%`,
+          top: `${state.y}%`,
+          transform: `translate(-50%, -50%) scale(${1 + state.clickPulse * 0.3})`,
+          pointerEvents: "none",
+          filter: "drop-shadow(0 4px 12px rgba(0,0,0,0.35))",
+        }}
+      >
+        <svg
+          width="22"
+          height="22"
+          viewBox="0 0 20 20"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M3 1.5l13.5 7-5 1.7-2.4 5L3 1.5z"
+            fill="white"
+            stroke="#111"
+            strokeWidth="1.2"
+            strokeLinejoin="round"
+          />
+        </svg>
+        {/* Hotspot label */}
+        {state.hotspotLabel ? (
+          <div
+            style={{
+              position: "absolute",
+              left: 18,
+              top: 18,
+              whiteSpace: "nowrap",
+              fontFamily,
+              fontWeight: 600,
+              fontSize: 12,
+              color: "#fff",
+              background: "rgba(0,0,0,0.78)",
+              padding: "4px 8px",
+              borderRadius: 6,
+              backdropFilter: "blur(8px)",
+            }}
+          >
+            {state.hotspotLabel}
+          </div>
+        ) : null}
+      </div>
+    </>
+  );
+};
+
+// Per-shot caption — sits at the bottom of the screenshot area.
+const ShotCaption: React.FC<{
+  text: string;
+  segProgress: number;
+  isLight: boolean;
+}> = ({ text, segProgress, isLight }) => {
+  // Fade in over the first 8% of the shot, fade out over the last 6%.
+  const opacity = interpolate(
+    segProgress,
+    [0, 0.08, 0.94, 1],
+    [0, 1, 1, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "50%",
+        bottom: 24,
+        transform: "translateX(-50%)",
+        maxWidth: "78%",
+        textAlign: "center",
+        fontFamily,
+        fontWeight: 600,
+        fontSize: 18,
+        letterSpacing: "-0.005em",
+        color: isLight ? "#0a0a0c" : "#ffffff",
+        background: isLight
+          ? "rgba(255,255,255,0.85)"
+          : "rgba(0,0,0,0.65)",
+        backdropFilter: "blur(10px)",
+        padding: "8px 16px",
+        borderRadius: 8,
+        opacity,
+        pointerEvents: "none",
+      }}
+    >
+      {text}
+    </div>
+  );
+};
+
 // ───────── Main component ─────────
 
 export const UiShowcase: React.FC<Props> = ({
@@ -484,17 +823,15 @@ export const UiShowcase: React.FC<Props> = ({
       );
     }
   } else {
-    // Sequence playback — show the active shot with transitionIn + zoom
+    // Sequence playback — show the active shot with transitionIn + pan/zoom
     if (!activeSegment) {
       body = null;
     } else {
       const shot = activeSegment.shot;
       const localFrame = frame - activeSegment.start;
       const transition = shot.transitionIn ?? "fade";
-      // First shot uses fade unless explicitly set
       const t = enterTransform(transition, localFrame);
 
-      // Zoom progression across the segment duration
       const segProgress = interpolate(
         localFrame,
         [0, activeSegment.duration],
@@ -502,27 +839,52 @@ export const UiShowcase: React.FC<Props> = ({
         { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
       );
 
-      let zoomTransform = "";
-      if (shot.zoom) {
-        const targetScale = interpolate(
+      // ─── Pan / zoom transform on the media element ───
+      // `pan` takes priority over legacy `zoom`. Interpolates origin + scale.
+      let mediaTransform: React.CSSProperties = {};
+      if (shot.pan) {
+        const px = interpolate(
           segProgress,
           [0, 1],
-          [1, shot.zoom.scale],
-          { easing: ease.expoOut },
+          [shot.pan.from.x, shot.pan.to.x],
+          { easing: ease.cinematicInOut },
         );
-        const ox = shot.zoom.x;
-        const oy = shot.zoom.y;
-        zoomTransform = `transform-origin: ${ox}% ${oy}%;`;
-        // Combined transform applied below
-        // we'll apply scale + transform-origin via separate style
+        const py = interpolate(
+          segProgress,
+          [0, 1],
+          [shot.pan.from.y, shot.pan.to.y],
+          { easing: ease.cinematicInOut },
+        );
+        const ps = interpolate(
+          segProgress,
+          [0, 1],
+          [shot.pan.from.scale, shot.pan.to.scale],
+          { easing: ease.cinematicInOut },
+        );
+        mediaTransform = {
+          transform: `scale(${ps})`,
+          transformOrigin: `${px}% ${py}%`,
+        };
+      } else if (shot.zoom) {
+        const scale = interpolate(segProgress, [0, 1], [1, shot.zoom.scale], {
+          easing: ease.expoOut,
+        });
+        mediaTransform = {
+          transform: `scale(${scale})`,
+          transformOrigin: `${shot.zoom.x}% ${shot.zoom.y}%`,
+        };
       }
 
       // Frame position: user can move the device box around the canvas.
-      // (50, 50, 1.0) is centered. Values are percentages.
       const fp = shot.framePosition;
-      const fpX = fp ? fp.x - 50 : 0; // offset from center, in %
+      const fpX = fp ? fp.x - 50 : 0;
       const fpY = fp ? fp.y - 50 : 0;
       const fpScale = fp?.scale ?? 1;
+
+      // ─── Cursor walkthrough: position + click ring ───
+      const cursorState = shot.cursor?.actions?.length
+        ? computeCursorState(shot.cursor.actions, segProgress)
+        : null;
 
       body = (
         <div
@@ -548,23 +910,69 @@ export const UiShowcase: React.FC<Props> = ({
                   overflow: "hidden",
                 }}
               >
-                <Img
-                  src={shot.url}
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "cover",
-                    display: "block",
-                    transform: shot.zoom
-                      ? `scale(${interpolate(segProgress, [0, 1], [1, shot.zoom.scale], { easing: ease.expoOut })})`
-                      : "none",
-                    transformOrigin: shot.zoom
-                      ? `${shot.zoom.x}% ${shot.zoom.y}%`
-                      : "center center",
-                  }}
-                />
-                {/* Zoom-target indicator (only visible briefly when zoom set) */}
-                {shot.zoom && segProgress > 0.05 ? null : null}
+                {/* Media — image or video, with pan/zoom transform */}
+                {shot.mediaType === "video" ? (
+                  <OffthreadVideo
+                    src={shot.url}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "cover",
+                      display: "block",
+                      ...mediaTransform,
+                    }}
+                  />
+                ) : (
+                  <Img
+                    src={shot.url}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "cover",
+                      display: "block",
+                      ...mediaTransform,
+                    }}
+                  />
+                )}
+
+                {/* Spotlight overlay — dims everything outside the rect */}
+                {shot.spotlight &&
+                segProgress >= (shot.spotlight.appearAt ?? 0) ? (
+                  <SpotlightOverlay
+                    rect={shot.spotlight}
+                    segProgress={segProgress}
+                  />
+                ) : null}
+
+                {/* Annotation pins */}
+                {shot.annotations?.map((ann, i) =>
+                  segProgress >= (ann.appearAt ?? 0) ? (
+                    <AnnotationPin
+                      key={`ann-${i}`}
+                      ann={ann}
+                      segProgress={segProgress}
+                    />
+                  ) : null,
+                )}
+
+                {/* Cursor walkthrough — synthetic mouse + click rings */}
+                {cursorState ? (
+                  <CursorOverlay
+                    state={cursorState}
+                    actions={shot.cursor!.actions}
+                    segProgress={segProgress}
+                    accent={brand.accent}
+                  />
+                ) : null}
+
+                {/* Per-shot caption */}
+                {shot.shotCaption ? (
+                  <ShotCaption
+                    text={shot.shotCaption}
+                    segProgress={segProgress}
+                    isLight={isLight}
+                  />
+                ) : null}
               </div>
             }
           />

@@ -1153,6 +1153,758 @@ const ShotCanvases: React.FC<{
   );
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Per-shot animation controls — pan keyframes, annotations, cursor walk-
+// through, spotlight, per-shot caption, media type. Each lives in a
+// collapsible <details> so the editor stays compact when not in use.
+// ─────────────────────────────────────────────────────────────────────────
+
+type ShotPanState = NonNullable<ShotForCanvas["pan"]>;
+type ShotAnnotation = NonNullable<ShotForCanvas["annotations"]>[number];
+type ShotCursorAction = NonNullable<ShotForCanvas["cursor"]>["actions"][number];
+type ShotSpotlight = NonNullable<ShotForCanvas["spotlight"]>;
+
+// Drag-aware canvas: click empty space to add, drag existing markers to
+// move, click existing markers to select. All callbacks are optional —
+// pass only the ones you want enabled.
+const InteractiveCanvas: React.FC<{
+  imageUrl: string;
+  markers: Array<{
+    x: number;
+    y: number;
+    color: string;
+    label?: string;
+    type?: "click" | "move" | "zoom" | "pin" | "pan";
+  }>;
+  selectedIdx?: number;
+  onTap?: (x: number, y: number) => void;
+  onDragMarker?: (idx: number, x: number, y: number) => void;
+  onClickMarker?: (idx: number) => void;
+  aspectRatio?: string;
+}> = ({
+  imageUrl,
+  markers,
+  selectedIdx,
+  onTap,
+  onDragMarker,
+  onClickMarker,
+  aspectRatio = "16 / 10",
+}) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState<number | null>(null);
+  const didDragRef = useRef(false);
+
+  const xyFromEvent = (
+    e: PointerEvent | React.PointerEvent | React.MouseEvent,
+  ): { x: number; y: number } | null => {
+    if (!ref.current) return null;
+    const rect = ref.current.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    return {
+      x: Math.max(0, Math.min(100, Math.round(x * 10) / 10)),
+      y: Math.max(0, Math.min(100, Math.round(y * 10) / 10)),
+    };
+  };
+
+  useEffect(() => {
+    if (dragging === null || !onDragMarker) return;
+    const handleMove = (e: PointerEvent) => {
+      didDragRef.current = true;
+      const pos = xyFromEvent(e);
+      if (pos) onDragMarker(dragging, pos.x, pos.y);
+    };
+    const handleUp = () => {
+      setDragging(null);
+      // Tiny delay so the canvas-click handler doesn't fire after drag
+      window.setTimeout(() => {
+        didDragRef.current = false;
+      }, 60);
+    };
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+    };
+  }, [dragging, onDragMarker]);
+
+  return (
+    <div
+      ref={ref}
+      onClick={(e) => {
+        if (didDragRef.current) return;
+        if (!onTap) return;
+        const pos = xyFromEvent(e);
+        if (pos) onTap(pos.x, pos.y);
+      }}
+      className={`relative select-none overflow-hidden rounded border border-white/10 ${onTap ? "cursor-crosshair" : ""}`}
+      style={{ aspectRatio, width: "100%", touchAction: "none" }}
+    >
+      <img
+        src={imageUrl}
+        alt=""
+        className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+        onError={(e) => {
+          (e.currentTarget as HTMLImageElement).style.opacity = "0.3";
+        }}
+      />
+      {/* Rule-of-thirds */}
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)",
+          backgroundSize: "33.333% 33.333%",
+        }}
+      />
+      {markers.map((m, i) => {
+        const isSelected = selectedIdx === i;
+        const isDraggable = !!onDragMarker;
+        return (
+          <div
+            key={i}
+            onPointerDown={(e) => {
+              if (!isDraggable) return;
+              e.stopPropagation();
+              (e.currentTarget as HTMLDivElement).setPointerCapture?.(
+                e.pointerId,
+              );
+              setDragging(i);
+              onClickMarker?.(i);
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!didDragRef.current) onClickMarker?.(i);
+            }}
+            className="absolute"
+            style={{
+              left: `${m.x}%`,
+              top: `${m.y}%`,
+              transform: `translate(-50%, -50%) scale(${isSelected ? 1.25 : 1})`,
+              transition:
+                dragging === i ? "none" : "transform 120ms ease-out",
+              cursor: isDraggable
+                ? dragging === i
+                  ? "grabbing"
+                  : "grab"
+                : "default",
+              zIndex: dragging === i || isSelected ? 20 : 10,
+            }}
+          >
+            <div
+              className="flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold text-black shadow-md"
+              style={{
+                background: m.color,
+                boxShadow: isSelected
+                  ? `0 0 0 3px ${m.color}55, 0 4px 12px rgba(0,0,0,0.4)`
+                  : "0 2px 6px rgba(0,0,0,0.3)",
+              }}
+            >
+              {m.type === "click"
+                ? "•"
+                : m.type === "zoom"
+                  ? "⊕"
+                  : m.type === "move"
+                    ? "›"
+                    : m.type === "pan"
+                      ? "◎"
+                      : i + 1}
+            </div>
+            {m.label ? (
+              <div
+                className="pointer-events-none absolute left-7 top-0 whitespace-nowrap rounded bg-black/75 px-1.5 py-0.5 text-[10px] text-white backdrop-blur"
+              >
+                {m.label}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const ShotAnimationControls: React.FC<{
+  shot: ShotForCanvas;
+  onUpdate: (patch: Partial<ShotForCanvas>) => void;
+}> = ({ shot, onUpdate }) => {
+  const cursorActions = shot.cursor?.actions ?? [];
+  const annotations = shot.annotations ?? [];
+  const pan = shot.pan;
+  const spotlight = shot.spotlight;
+
+  const sectionStyle =
+    "rounded-lg border border-white/[0.08] bg-white/[0.015] p-2.5";
+  const labelStyle =
+    "mb-1.5 flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-white/45";
+
+  return (
+    <details className="rounded-lg border border-white/[0.08] bg-white/[0.02] p-3">
+      <summary className="flex cursor-pointer items-center justify-between font-mono text-[10px] uppercase tracking-widest text-white/55">
+        <span>✦ Animate this shot</span>
+        <span className="text-white/30">
+          {[
+            shot.shotCaption ? "caption" : null,
+            shot.mediaType === "video" ? "video" : null,
+            pan ? "pan" : null,
+            spotlight ? "spotlight" : null,
+            annotations.length ? `${annotations.length} pins` : null,
+            cursorActions.length
+              ? `${cursorActions.length} cursor steps`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · ") || "none"}
+        </span>
+      </summary>
+
+      <div className="mt-3 space-y-3">
+        {/* Media type + per-shot caption */}
+        <div className={sectionStyle}>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <div className={labelStyle}>
+                <span>Media type</span>
+              </div>
+              <select
+                value={shot.mediaType ?? "image"}
+                onChange={(e) =>
+                  onUpdate({
+                    mediaType: e.target.value as "image" | "video",
+                  })
+                }
+                className="w-full rounded border border-white/10 bg-white/[0.03] px-2 py-1.5 text-xs text-white outline-none"
+              >
+                <option value="image">Image (PNG/JPG)</option>
+                <option value="video">Video (MP4/WebM)</option>
+              </select>
+            </div>
+            <div>
+              <div className={labelStyle}>
+                <span>Per-shot caption</span>
+                {shot.shotCaption ? (
+                  <button
+                    onClick={() => onUpdate({ shotCaption: undefined })}
+                    className="text-white/40 hover:text-red-300"
+                  >
+                    clear
+                  </button>
+                ) : null}
+              </div>
+              <input
+                value={shot.shotCaption ?? ""}
+                onChange={(e) =>
+                  onUpdate({ shotCaption: e.target.value || undefined })
+                }
+                placeholder="e.g. Tap to create issue"
+                className="w-full rounded border border-white/10 bg-white/[0.03] px-2 py-1.5 text-xs text-white outline-none placeholder:text-white/30"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Pan keyframes (Ken Burns) */}
+        <div className={sectionStyle}>
+          <div className={labelStyle}>
+            <span>Pan (Ken Burns)</span>
+            <div className="flex items-center gap-2">
+              {pan ? (
+                <button
+                  onClick={() => onUpdate({ pan: undefined })}
+                  className="text-white/40 hover:text-red-300"
+                >
+                  clear
+                </button>
+              ) : null}
+              {!pan && shot.url ? (
+                <button
+                  onClick={() =>
+                    onUpdate({
+                      pan: {
+                        from: { x: 50, y: 50, scale: 1 },
+                        to: { x: 50, y: 50, scale: 1.5 },
+                      },
+                    })
+                  }
+                  className="text-cyan-300 hover:text-cyan-200"
+                >
+                  + add
+                </button>
+              ) : null}
+            </div>
+          </div>
+          {pan && shot.url ? (
+            <div className="space-y-2">
+              <InteractiveCanvas
+                imageUrl={shot.url}
+                markers={[
+                  {
+                    x: pan.from.x,
+                    y: pan.from.y,
+                    color: "#22D3EE",
+                    label: `start ×${pan.from.scale.toFixed(2)}`,
+                    type: "pan",
+                  },
+                  {
+                    x: pan.to.x,
+                    y: pan.to.y,
+                    color: "#FBBF24",
+                    label: `end ×${pan.to.scale.toFixed(2)}`,
+                    type: "pan",
+                  },
+                ]}
+                onDragMarker={(idx, x, y) => {
+                  const key = idx === 0 ? "from" : "to";
+                  onUpdate({
+                    pan: { ...pan, [key]: { ...pan[key], x, y } },
+                  });
+                }}
+              />
+              <div className="text-[10px] text-white/35">
+                <span className="text-white/55">Drag</span> the cyan start
+                marker and the amber end marker to set the pan path
+              </div>
+              {(["from", "to"] as const).map((key) => {
+                const point = pan[key];
+                const color = key === "from" ? "#22D3EE" : "#FBBF24";
+                return (
+                  <div
+                    key={key}
+                    className="flex items-center gap-2 text-[10px] text-white/55"
+                  >
+                    <span
+                      className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full"
+                      style={{ background: color }}
+                    />
+                    <span className="w-10 text-white/45">
+                      {key === "from" ? "start" : "end"}
+                    </span>
+                    <span className="w-8 text-right">scale</span>
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="3"
+                      step="0.05"
+                      value={point.scale}
+                      onChange={(e) =>
+                        onUpdate({
+                          pan: {
+                            ...pan,
+                            [key]: {
+                              ...point,
+                              scale: Number(e.target.value),
+                            },
+                          },
+                        })
+                      }
+                      className="flex-1"
+                    />
+                    <span className="w-10 text-right font-mono">
+                      ×{point.scale.toFixed(2)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-[10px] text-white/35">
+              Pan smoothly interpolates between two points + scales. Adds
+              cinematic motion to a still screenshot.
+            </div>
+          )}
+        </div>
+
+        {/* Spotlight */}
+        <div className={sectionStyle}>
+          <div className={labelStyle}>
+            <span>Spotlight</span>
+            <div className="flex items-center gap-2">
+              {spotlight ? (
+                <button
+                  onClick={() => onUpdate({ spotlight: undefined })}
+                  className="text-white/40 hover:text-red-300"
+                >
+                  clear
+                </button>
+              ) : (
+                <button
+                  onClick={() =>
+                    onUpdate({
+                      spotlight: {
+                        x: 25,
+                        y: 25,
+                        w: 50,
+                        h: 50,
+                        intensity: 0.55,
+                        appearAt: 0.2,
+                      },
+                    })
+                  }
+                  className="text-cyan-300 hover:text-cyan-200"
+                >
+                  + add
+                </button>
+              )}
+            </div>
+          </div>
+          {spotlight ? (
+            <div className="space-y-1.5">
+              <div className="grid grid-cols-4 gap-1.5 text-[10px] text-white/55">
+                {(["x", "y", "w", "h"] as const).map((k) => (
+                  <label key={k} className="flex flex-col gap-0.5">
+                    <span className="text-white/40">{k}%</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={spotlight[k]}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        if (Number.isFinite(v))
+                          onUpdate({
+                            spotlight: { ...spotlight, [k]: v },
+                          });
+                      }}
+                      className="rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[10px] text-white outline-none"
+                    />
+                  </label>
+                ))}
+              </div>
+              <div className="flex items-center gap-2 text-[10px] text-white/45">
+                <span>dim</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={spotlight.intensity ?? 0.55}
+                  onChange={(e) =>
+                    onUpdate({
+                      spotlight: {
+                        ...spotlight,
+                        intensity: Number(e.target.value),
+                      },
+                    })
+                  }
+                  className="flex-1"
+                />
+                <span>start</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={spotlight.appearAt ?? 0}
+                  onChange={(e) =>
+                    onUpdate({
+                      spotlight: {
+                        ...spotlight,
+                        appearAt: Number(e.target.value),
+                      },
+                    })
+                  }
+                  className="flex-1"
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="text-[10px] text-white/35">
+              Highlights a rectangle of the screenshot and dims the rest.
+            </div>
+          )}
+        </div>
+
+        {/* Annotations */}
+        <div className={sectionStyle}>
+          <div className={labelStyle}>
+            <span>Annotation pins ({annotations.length})</span>
+            {annotations.length > 0 ? (
+              <button
+                onClick={() => onUpdate({ annotations: [] })}
+                className="text-white/40 hover:text-red-300"
+              >
+                clear all
+              </button>
+            ) : null}
+          </div>
+          {shot.url ? (
+            <div className="space-y-2">
+              <InteractiveCanvas
+                imageUrl={shot.url}
+                markers={annotations.map((a) => ({
+                  x: a.x,
+                  y: a.y,
+                  color: a.color ?? "#FBBF24",
+                  label: a.text || "Label",
+                  type: "pin" as const,
+                }))}
+                onTap={(x, y) =>
+                  onUpdate({
+                    annotations: [
+                      ...annotations,
+                      { x, y, text: "Label", side: "top", appearAt: 0 },
+                    ],
+                  })
+                }
+                onDragMarker={(idx, x, y) =>
+                  onUpdate({
+                    annotations: annotations.map((a, i) =>
+                      i === idx ? { ...a, x, y } : a,
+                    ),
+                  })
+                }
+              />
+              <div className="text-[10px] text-white/35">
+                <span className="text-white/55">Click</span> to add a pin ·{" "}
+                <span className="text-white/55">drag</span> to move
+              </div>
+              {annotations.length > 0 ? (
+                <div className="space-y-1">
+                  {annotations.map((a, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.02] p-1.5"
+                    >
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-center font-mono text-[10px] text-black"
+                        style={{ background: a.color ?? "#FBBF24" }}
+                      >
+                        {i + 1}
+                      </span>
+                      <input
+                        value={a.text}
+                        onChange={(e) =>
+                          onUpdate({
+                            annotations: annotations.map((x, j) =>
+                              j === i ? { ...x, text: e.target.value } : x,
+                            ),
+                          })
+                        }
+                        className="flex-1 rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[11px] text-white outline-none"
+                      />
+                      <select
+                        value={a.side ?? "top"}
+                        onChange={(e) =>
+                          onUpdate({
+                            annotations: annotations.map((x, j) =>
+                              j === i
+                                ? {
+                                    ...x,
+                                    side: e.target.value as ShotAnnotation["side"],
+                                  }
+                                : x,
+                            ),
+                          })
+                        }
+                        className="rounded border border-white/10 bg-white/[0.03] px-1 py-0.5 text-[10px] text-white outline-none"
+                        title="Label side"
+                      >
+                        <option value="top">↑</option>
+                        <option value="right">→</option>
+                        <option value="bottom">↓</option>
+                        <option value="left">←</option>
+                      </select>
+                      <button
+                        onClick={() =>
+                          onUpdate({
+                            annotations: annotations.filter((_, j) => j !== i),
+                          })
+                        }
+                        className="px-1 text-white/40 hover:text-red-300"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="text-[10px] text-white/35">
+              Upload a screenshot first.
+            </div>
+          )}
+        </div>
+
+        {/* Cursor walkthrough */}
+        <div className={sectionStyle}>
+          <div className={labelStyle}>
+            <span>Cursor walkthrough ({cursorActions.length})</span>
+            {cursorActions.length > 0 ? (
+              <button
+                onClick={() => onUpdate({ cursor: { actions: [] } })}
+                className="text-white/40 hover:text-red-300"
+              >
+                clear all
+              </button>
+            ) : null}
+          </div>
+          {shot.url ? (
+            <div className="space-y-2">
+              <InteractiveCanvas
+                imageUrl={shot.url}
+                markers={cursorActions.map((a, i) => ({
+                  x: a.x,
+                  y: a.y,
+                  color:
+                    a.type === "click"
+                      ? "#FB7185"
+                      : a.type === "zoom"
+                        ? "#22D3EE"
+                        : "#A4B0F5",
+                  label: a.label
+                    ? `${i + 1}. ${a.label}`
+                    : `${i + 1}. ${a.type}`,
+                  type: a.type,
+                }))}
+                onTap={(x, y) => {
+                  if (cursorActions.length >= 10) return;
+                  // Default new stop to "click" type, append with auto-incremented `at`
+                  const lastAt =
+                    cursorActions.length === 0
+                      ? 0.1
+                      : (cursorActions[cursorActions.length - 1].at ?? 0.1) +
+                        0.2;
+                  const at = Math.min(0.95, lastAt);
+                  onUpdate({
+                    cursor: {
+                      actions: [
+                        ...cursorActions,
+                        { at, type: "click", x, y, label: "" },
+                      ],
+                    },
+                  });
+                }}
+                onDragMarker={(idx, x, y) =>
+                  onUpdate({
+                    cursor: {
+                      actions: cursorActions.map((a, i) =>
+                        i === idx ? { ...a, x, y } : a,
+                      ),
+                    },
+                  })
+                }
+              />
+              <div className="text-[10px] text-white/35">
+                <span className="text-white/55">Click</span> to add a stop ·{" "}
+                <span className="text-white/55">drag</span> to move · cursor
+                animates through stops in order
+              </div>
+              {cursorActions.length > 0 ? (
+                <div className="space-y-1">
+                  {cursorActions.map((a, i) => {
+                    const color =
+                      a.type === "click"
+                        ? "#FB7185"
+                        : a.type === "zoom"
+                          ? "#22D3EE"
+                          : "#A4B0F5";
+                    return (
+                      <div
+                        key={i}
+                        className="grid grid-cols-[20px_1fr_70px_56px_24px] items-center gap-1.5 rounded border border-white/10 bg-white/[0.02] p-1.5"
+                      >
+                        <span
+                          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-center font-mono text-[10px] text-black"
+                          style={{ background: color }}
+                        >
+                          {i + 1}
+                        </span>
+                        <input
+                          value={a.label ?? ""}
+                          placeholder="hotspot label"
+                          onChange={(e) =>
+                            onUpdate({
+                              cursor: {
+                                actions: cursorActions.map((x, j) =>
+                                  j === i
+                                    ? {
+                                        ...x,
+                                        label: e.target.value || undefined,
+                                      }
+                                    : x,
+                                ),
+                              },
+                            })
+                          }
+                          className="rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[11px] text-white outline-none placeholder:text-white/30"
+                        />
+                        <select
+                          value={a.type}
+                          onChange={(e) =>
+                            onUpdate({
+                              cursor: {
+                                actions: cursorActions.map((x, j) =>
+                                  j === i
+                                    ? {
+                                        ...x,
+                                        type: e.target
+                                          .value as ShotCursorAction["type"],
+                                      }
+                                    : x,
+                                ),
+                              },
+                            })
+                          }
+                          className="rounded border border-white/10 bg-white/[0.03] px-1 py-0.5 text-[10px] text-white outline-none"
+                        >
+                          <option value="move">move</option>
+                          <option value="click">click</option>
+                          <option value="zoom">zoom</option>
+                        </select>
+                        <input
+                          type="number"
+                          step="0.05"
+                          min="0"
+                          max="1"
+                          value={a.at.toFixed(2)}
+                          title="Progress through shot (0–1)"
+                          onChange={(e) => {
+                            const v = Number(e.target.value);
+                            if (Number.isFinite(v))
+                              onUpdate({
+                                cursor: {
+                                  actions: cursorActions.map((x, j) =>
+                                    j === i ? { ...x, at: v } : x,
+                                  ),
+                                },
+                              });
+                          }}
+                          className="rounded border border-white/10 bg-white/[0.03] px-1 py-0.5 text-[10px] text-white outline-none"
+                        />
+                        <button
+                          onClick={() =>
+                            onUpdate({
+                              cursor: {
+                                actions: cursorActions.filter(
+                                  (_, j) => j !== i,
+                                ),
+                              },
+                            })
+                          }
+                          className="px-1 text-white/40 hover:text-red-300"
+                          title="Delete stop"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="text-[10px] text-white/35">
+              Upload a screenshot first.
+            </div>
+          )}
+        </div>
+      </div>
+    </details>
+  );
+};
+
 const UiShowcaseEditor: React.FC<{
   scene: Extract<Scene, { type: "uiShowcase" }>;
   onChange: (next: Scene) => void;
@@ -1436,6 +2188,14 @@ const UiShowcaseEditor: React.FC<{
                   }
                   onMaximize={(kind) => setMaximizedTarget({ idx, kind })}
                   onCollapse={() => setMaximizedTarget(null)}
+                  onUpdate={(patch) => updateShot(idx, patch)}
+                />
+              ) : null}
+
+              {/* Advanced animation controls — pan, spotlight, pins, cursor */}
+              {shot.url ? (
+                <ShotAnimationControls
+                  shot={shot}
                   onUpdate={(patch) => updateShot(idx, patch)}
                 />
               ) : null}

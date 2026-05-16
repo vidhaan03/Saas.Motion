@@ -195,6 +195,12 @@ const callNvidiaVision = async (
     process.env.NVIDIA_NIM_BASE_URL ??
     "https://integrate.api.nvidia.com/v1/chat/completions";
 
+  // 30s is enough for a warm vision call; short enough to give up and try
+  // the next model in the chain when Qwen / Llama-90B cold-start beyond that.
+  const timeoutMs = Number(
+    process.env.NVIDIA_NIM_VISION_TIMEOUT_MS ?? "30000",
+  );
+
   const res = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -220,6 +226,7 @@ const callNvidiaVision = async (
       max_tokens: 4096,
       response_format: { type: "json_object" },
     }),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!res.ok) {
@@ -409,18 +416,8 @@ export const suggestCursorPath = async (
 ): Promise<{ suggestions: CursorSuggestion[]; source: VisionSource }> => {
   const errors: string[] = [];
 
-  // 1) Qwen 3.5 397B (MoE, a17b active)
-  try {
-    const suggestions = await suggestCursorPathWithQwen(screenshotUrl, caption);
-    if (suggestions.length > 0) {
-      return { suggestions, source: "nim-qwen" };
-    }
-    errors.push("qwen returned 0 suggestions");
-  } catch (e) {
-    errors.push(`qwen: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
-  // 2) Llama 3.2 90B Vision
+  // 1) Llama 3.2 90B Vision (Meta's flagship VLM — fastest predictable
+  //    response on NIM at this scale; ~5-15s warm, ~30s cold)
   try {
     const suggestions = await suggestCursorPathWithLlamaVision(
       screenshotUrl,
@@ -432,6 +429,24 @@ export const suggestCursorPath = async (
     errors.push("llama-vision returned 0 suggestions");
   } catch (e) {
     errors.push(`llama-vision: ${e instanceof Error ? e.message : String(e)}`);
+    console.warn("[vision] llama-vision failed:", errors[errors.length - 1]);
+  }
+
+  // 2) Qwen 3.5 397B (MoE, a17b active — slower cold-start, used as
+  //    secondary because the 78s+ cold path was blocking the UI)
+  //
+  // Older order (Qwen → Llama) preserved here for reference:
+  //   const suggestions = await suggestCursorPathWithQwen(screenshotUrl, caption);
+  //   if (suggestions.length > 0) return { suggestions, source: "nim-qwen" };
+  try {
+    const suggestions = await suggestCursorPathWithQwen(screenshotUrl, caption);
+    if (suggestions.length > 0) {
+      return { suggestions, source: "nim-qwen" };
+    }
+    errors.push("qwen returned 0 suggestions");
+  } catch (e) {
+    errors.push(`qwen: ${e instanceof Error ? e.message : String(e)}`);
+    console.warn("[vision] qwen failed:", errors[errors.length - 1]);
   }
 
   // 3) Gemini (secondary fallback)

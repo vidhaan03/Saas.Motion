@@ -59,6 +59,7 @@ type StreamState =
       | "nim-gemma"
       | "nim-llama"
       | "agentic-nim"
+      | "agentic-gemini"
       | "agentic-mixed";
     }
   | {
@@ -69,6 +70,7 @@ type StreamState =
       | "nim-gemma"
       | "nim-llama"
       | "agentic-nim"
+      | "agentic-gemini"
       | "agentic-mixed";
     }
   | { phase: "error"; message: string };
@@ -81,19 +83,22 @@ const humanSourceName = (
     | "nim-gemma"
     | "nim-llama"
     | "agentic-nim"
+    | "agentic-gemini"
     | "agentic-mixed",
 ): string => {
   switch (s) {
+    case "agentic-gemini":
+      return "Agentic MoE · Gemini 2.5 Flash Lite";
     case "agentic-nim":
-      return "Agentic MoE · NIM Gemma";
+      return "Agentic MoE · NIM";
     case "agentic-mixed":
-      return "Agentic MoE · NIM + Gemini";
+      return "Agentic MoE · Gemini + NIM";
     case "nim-gemma":
-      return "NIM · Gemma 4 31B";
+      return "NIM";
     case "nim-llama":
-      return "NIM · Llama 3.1 405B";
+      return "NIM · Llama";
     case "gemini":
-      return "Gemini";
+      return "Gemini 2.5 Flash Lite";
     case "claude":
       return "Claude";
     case "mock":
@@ -188,6 +193,129 @@ export default function Home() {
 
   useEffect(() => {
     setSavedBoards(listBoards());
+  }, []);
+
+  // ─── Dev preview: `?preview=loading` shows the generating screen with a
+  //     simulated agent pipeline so you can iterate on its UI without
+  //     burning real API calls. Hit `?preview=loading&stage=N` to start at
+  //     a specific scene (0 = director thinking, 1+ = scenes complete).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("preview") !== "loading") return;
+
+    const startStage = Number(url.searchParams.get("stage") ?? "0");
+    const sample = sampleStoryboards[0];
+    const total = Math.min(5, sample.scenes.length);
+
+    setBrandName(sample.brand.name);
+    setColor(sample.brand.color);
+    setAccent(sample.brand.accent);
+    setStoryboard({ brand: sample.brand, scenes: [] });
+    setStream({
+      phase: "streaming",
+      total,
+      received: 0,
+      source: "agentic-nim",
+    });
+    setViewMode("generating");
+
+    // Step 1: simulate director planning (0 → done after ~1.2s)
+    const directorTimer = window.setTimeout(() => {
+      setTrace({
+        director: {
+          status: "done",
+          message: `Picked ${total} scenes · ${sample.scenes
+            .slice(0, total)
+            .map((s) => s.type)
+            .join(" → ")}`,
+          ms: 2100,
+        },
+        specialists: {},
+      });
+    }, 1200);
+
+    // Step 2: simulate specialists completing one by one (every ~1.4s)
+    const specialistTimers: number[] = [];
+    for (let i = 0; i < total; i++) {
+      // Mark thinking at start of slot
+      specialistTimers.push(
+        window.setTimeout(() => {
+          setTrace((prev) => ({
+            ...prev,
+            specialists: {
+              ...prev.specialists,
+              [i]: {
+                status: "thinking",
+                sceneType: sample.scenes[i].type,
+              },
+            },
+          }));
+        }, 1400 + i * 1400),
+      );
+      // Mark done + push scene at end of slot
+      specialistTimers.push(
+        window.setTimeout(() => {
+          setTrace((prev) => ({
+            ...prev,
+            specialists: {
+              ...prev.specialists,
+              [i]: {
+                status: "done",
+                sceneType: sample.scenes[i].type,
+                ms: 800 + Math.round(Math.random() * 1200),
+              },
+            },
+          }));
+          setStoryboard((prev) => ({
+            brand: sample.brand,
+            scenes: [...prev.scenes, sample.scenes[i]],
+          }));
+          setStream({
+            phase: "streaming",
+            total,
+            received: i + 1,
+            source: "agentic-nim",
+          });
+        }, 2400 + i * 1400),
+      );
+    }
+
+    // Jump to a specific stage if requested (useful for screenshotting)
+    if (startStage > 0) {
+      const completed = sample.scenes.slice(0, Math.min(startStage, total));
+      const specialists: typeof trace.specialists = {};
+      completed.forEach((s, i) => {
+        specialists[i] = {
+          status: "done",
+          sceneType: s.type,
+          ms: 800 + Math.round(Math.random() * 1200),
+        };
+      });
+      window.clearTimeout(directorTimer);
+      specialistTimers.forEach((t) => window.clearTimeout(t));
+      setTrace({
+        director: {
+          status: "done",
+          message: `Picked ${total} scenes · ${sample.scenes.slice(0, total).map((s) => s.type).join(" → ")}`,
+          ms: 2100,
+        },
+        specialists,
+      });
+      setStoryboard({ brand: sample.brand, scenes: completed });
+      setStream({
+        phase: startStage >= total ? "done" : "streaming",
+        total,
+        received: completed.length,
+        source: "agentic-nim",
+      });
+    }
+
+    return () => {
+      window.clearTimeout(directorTimer);
+      specialistTimers.forEach((t) => window.clearTimeout(t));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const SUGGESTIONS = [
@@ -366,11 +494,502 @@ export default function Home() {
   const hasScenes = storyboard.scenes.length > 0;
 
   if (viewMode === "welcome") {
-    const today = new Date().toLocaleDateString("en-US", {
-      weekday: "long",
-      month: "short",
-      day: "numeric",
-    });
+    const filteredPresets = presets.filter(
+      (p) => presetFilter === "all" || p.category === presetFilter,
+    );
+    return (
+      <main
+        className="relative min-h-screen overflow-x-hidden"
+        style={{ color: "var(--ink)" }}
+      >
+        {/* ─── Atmospheric backdrop ─── */}
+        <div
+          className="pointer-events-none absolute inset-0 -z-10"
+          style={{
+            background:
+              "radial-gradient(ellipse at 15% 0%, #FCDFCB 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, #E8A689 0%, transparent 55%), linear-gradient(180deg, var(--bg) 0%, var(--bg-warm) 100%)",
+          }}
+        />
+        {/* Subtle grain overlay */}
+        <div
+          className="pointer-events-none absolute inset-0 -z-10 opacity-[0.04] mix-blend-multiply"
+          style={{
+            backgroundImage:
+              "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>\")",
+          }}
+        />
+
+        {/* ─── Glassy pill nav ─── */}
+        <header className="relative flex justify-center px-6 pt-6">
+          <nav
+            className="flex items-center gap-1 rounded-full border px-2 py-1.5 backdrop-blur-2xl"
+            style={{
+              background:
+                "color-mix(in srgb, var(--bg-elev) 70%, transparent)",
+              borderColor:
+                "color-mix(in srgb, var(--ink) 12%, transparent)",
+              boxShadow: "var(--shadow)",
+            }}
+          >
+            <span
+              className="px-4 py-1.5 text-base"
+              style={{ color: "var(--ink)" }}
+            >
+              <span
+                className="italic"
+                style={{
+                  fontFamily: "var(--font-serif), serif",
+                  fontWeight: 500,
+                }}
+              >
+                motion
+              </span>
+              <span style={{ fontWeight: 600 }}>.saas</span>
+            </span>
+            <button
+              onClick={() => {
+                document
+                  .getElementById("presets")
+                  ?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="rounded-full px-3 py-1.5 text-sm transition hover:bg-black/5"
+              style={{ color: "var(--ink-muted)" }}
+            >
+              Presets
+            </button>
+            <button
+              onClick={() => {
+                document
+                  .getElementById("examples")
+                  ?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="rounded-full px-3 py-1.5 text-sm transition hover:bg-black/5"
+              style={{ color: "var(--ink-muted)" }}
+            >
+              Examples
+            </button>
+            {savedBoards.length > 0 ? (
+              <button
+                onClick={() => {
+                  document
+                    .getElementById("saved")
+                    ?.scrollIntoView({ behavior: "smooth" });
+                }}
+                className="rounded-full px-3 py-1.5 text-sm transition hover:bg-black/5"
+                style={{ color: "var(--ink-muted)" }}
+              >
+                Saved
+                <span className="ml-1.5 text-xs opacity-50">
+                  {savedBoards.length}
+                </span>
+              </button>
+            ) : null}
+            <a
+              href="https://github.com/vidhaan03/Saas.Motion"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-full px-3 py-1.5 text-sm transition hover:bg-black/5"
+              style={{ color: "var(--ink-muted)" }}
+            >
+              GitHub
+            </a>
+            <button
+              onClick={generate}
+              disabled={streaming || prompt.trim().length === 0}
+              className="ml-1 rounded-full px-5 py-2 text-sm font-medium transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30"
+              style={{
+                background: "var(--ink)",
+                color: "var(--bg)",
+              }}
+            >
+              Generate
+            </button>
+          </nav>
+        </header>
+
+        {/* ─── Centered hero ─── */}
+        <section className="relative flex min-h-[calc(100vh-100px)] flex-col items-center justify-center px-6 pb-12 pt-12">
+          <h1
+            className="text-center leading-[0.92] tracking-[-0.04em]"
+            style={{
+              fontSize: "clamp(72px, 11vw, 168px)",
+              color: "var(--ink)",
+            }}
+          >
+            <span
+              className="italic"
+              style={{
+                fontFamily: "var(--font-serif), serif",
+                fontWeight: 500,
+              }}
+            >
+              motion
+            </span>
+            <span style={{ fontWeight: 700 }}>.saas</span>
+          </h1>
+
+          <p
+            className="mt-7 max-w-xl text-center text-base sm:text-lg"
+            style={{ color: "var(--ink-muted)", lineHeight: 1.5 }}
+          >
+            Turn a prompt into a cinematic SaaS launch ad in eight seconds.
+            Multi-agent storyboards, brand-aware scenes, editable on a
+            Mosaic-style canvas.
+          </p>
+
+          {/* Big prompt input */}
+          <div className="mt-10 w-full max-w-2xl">
+            <div
+              className="group relative overflow-hidden rounded-2xl border backdrop-blur-2xl transition focus-within:shadow-2xl"
+              style={{
+                background:
+                  "color-mix(in srgb, var(--bg-elev) 92%, transparent)",
+                borderColor:
+                  "color-mix(in srgb, var(--ink) 10%, transparent)",
+                boxShadow: "var(--shadow)",
+              }}
+            >
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={3}
+                placeholder="Describe your product, the audience, and the one number worth shouting…"
+                className="w-full resize-none bg-transparent p-5 pr-16 text-lg leading-snug outline-none"
+                style={{
+                  color: "var(--ink)",
+                  fontSize: "clamp(15px, 1.4vw, 18px)",
+                }}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    if (!streaming && prompt.trim()) generate();
+                  }
+                }}
+              />
+              <button
+                onClick={generate}
+                disabled={streaming || prompt.trim().length === 0}
+                title="Generate (Cmd+Enter)"
+                className="absolute bottom-3 right-3 flex h-10 w-10 items-center justify-center rounded-full transition hover:scale-105 disabled:cursor-not-allowed disabled:opacity-25"
+                style={{
+                  background: "var(--ink)",
+                  color: "var(--bg)",
+                }}
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="12" y1="19" x2="12" y2="5" />
+                  <polyline points="5 12 12 5 19 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Compact settings row */}
+            <div
+              className="mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 font-mono text-[11px]"
+              style={{ color: "var(--ink-muted)" }}
+            >
+              <span style={{ color: "var(--ink-faint)" }}>brand</span>
+              <input
+                value={brandName}
+                onChange={(e) => setBrandName(e.target.value)}
+                placeholder="—"
+                className="w-24 bg-transparent text-center outline-none"
+                style={{ color: "var(--ink)" }}
+              />
+              <span style={{ color: "var(--ink-faint)" }}>·</span>
+              <label className="flex cursor-pointer items-center gap-1.5">
+                <input
+                  type="color"
+                  value={color}
+                  onChange={(e) => setColor(e.target.value)}
+                  className="h-3 w-3 cursor-pointer appearance-none rounded-full border-0"
+                  style={{ background: color }}
+                />
+                <span>{color}</span>
+              </label>
+              <span style={{ color: "var(--ink-faint)" }}>·</span>
+              <label className="flex cursor-pointer items-center gap-1.5">
+                <input
+                  type="color"
+                  value={accent}
+                  onChange={(e) => setAccent(e.target.value)}
+                  className="h-3 w-3 cursor-pointer appearance-none rounded-full border-0"
+                  style={{ background: accent }}
+                />
+                <span>{accent}</span>
+              </label>
+              <span style={{ color: "var(--ink-faint)" }}>·</span>
+              <div className="flex items-center gap-1">
+                {ASPECTS.map((a) => {
+                  const isActive = a === aspect;
+                  return (
+                    <button
+                      key={a}
+                      onClick={() => setAspect(a)}
+                      className="rounded-full px-2 py-0.5 transition"
+                      style={{
+                        background: isActive ? "var(--ink)" : "transparent",
+                        color: isActive ? "var(--bg)" : "var(--ink-muted)",
+                      }}
+                    >
+                      {ASPECT_META[a].short}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Example chips */}
+            <div className="mt-6 flex flex-wrap justify-center gap-2">
+              {SUGGESTIONS.slice(0, 4).map((s, i) => (
+                <button
+                  key={i}
+                  onClick={() => setPrompt(s)}
+                  className="rounded-full border px-3 py-1.5 text-xs backdrop-blur transition hover:scale-[1.02]"
+                  style={{
+                    background:
+                      "color-mix(in srgb, var(--bg-elev) 60%, transparent)",
+                    borderColor:
+                      "color-mix(in srgb, var(--ink) 10%, transparent)",
+                    color: "var(--ink-muted)",
+                  }}
+                >
+                  {s.length > 48 ? s.slice(0, 48) + "…" : s}
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ─── Below the fold: presets + examples + saved ─── */}
+        <section
+          id="presets"
+          className="relative mx-auto w-full max-w-[1100px] px-8 pb-16 pt-12"
+        >
+          <div
+            className="mb-4 flex items-baseline justify-between border-b pb-3 font-mono text-[11px] uppercase tracking-widest"
+            style={{
+              borderColor: "var(--rule)",
+              color: "var(--ink-faint)",
+            }}
+          >
+            <span>Presets</span>
+            <span>
+              {filteredPresets.length} of {presets.length} brands
+            </span>
+          </div>
+          <div
+            className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-2 font-mono text-[11px] uppercase tracking-widest"
+          >
+            <button
+              onClick={() => setPresetFilter("all")}
+              className="border-b transition"
+              style={{
+                borderColor:
+                  presetFilter === "all" ? "var(--ink)" : "transparent",
+                color:
+                  presetFilter === "all"
+                    ? "var(--ink)"
+                    : "var(--ink-faint)",
+              }}
+            >
+              all
+            </button>
+            {PRESET_CATEGORIES.map((c) => (
+              <button
+                key={c}
+                onClick={() => setPresetFilter(c)}
+                className="border-b transition"
+                style={{
+                  borderColor:
+                    presetFilter === c ? "var(--ink)" : "transparent",
+                  color:
+                    presetFilter === c
+                      ? "var(--ink)"
+                      : "var(--ink-faint)",
+                }}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-x-8 sm:grid-cols-3 lg:grid-cols-4">
+            {filteredPresets.map((p) => {
+              const sb = p.storyboard;
+              const seconds = Math.round(
+                sb.scenes.reduce((a, s) => a + s.duration, 0) / 30,
+              );
+              return (
+                <button
+                  key={sb.brand.name}
+                  onClick={() => pickPreset(sb)}
+                  className="group grid h-11 grid-cols-[12px_1fr_auto] items-center gap-3 border-b text-left transition"
+                  style={{ borderColor: "var(--rule)" }}
+                >
+                  <span
+                    className="h-2 w-2 rounded-full transition group-hover:scale-150"
+                    style={{ background: sb.brand.accent }}
+                  />
+                  <span
+                    className="min-w-0 truncate text-sm"
+                    style={{ color: "var(--ink)" }}
+                  >
+                    {sb.brand.name.toLowerCase()}
+                  </span>
+                  <span
+                    className="w-14 text-right font-mono text-[10px] tabular-nums"
+                    style={{ color: "var(--ink-faint)" }}
+                  >
+                    {sb.scenes.length}·{seconds}s
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section
+          id="examples"
+          className="relative mx-auto w-full max-w-[1100px] px-8 pb-16"
+        >
+          <div
+            className="mb-4 flex items-baseline justify-between border-b pb-3 font-mono text-[11px] uppercase tracking-widest"
+            style={{
+              borderColor: "var(--rule)",
+              color: "var(--ink-faint)",
+            }}
+          >
+            <span>Example prompts</span>
+            <span>click to load</span>
+          </div>
+          <div className="grid gap-y-2 sm:grid-cols-2 sm:gap-x-8">
+            {SUGGESTIONS.map((s, i) => (
+              <button
+                key={i}
+                onClick={() => setPrompt(s)}
+                className="group flex items-baseline gap-3 text-left text-sm transition"
+                style={{ color: "var(--ink-muted)" }}
+              >
+                <span
+                  className="font-mono text-[10px]"
+                  style={{ color: "var(--ink-faint)" }}
+                >
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <span
+                  className="border-b border-transparent leading-relaxed group-hover:border-current"
+                >
+                  {s}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {savedBoards.length > 0 ? (
+          <section
+            id="saved"
+            className="relative mx-auto w-full max-w-[1100px] px-8 pb-24"
+          >
+            <div
+              className="mb-4 flex items-baseline justify-between border-b pb-3 font-mono text-[11px] uppercase tracking-widest"
+              style={{
+                borderColor: "var(--rule)",
+                color: "var(--ink-faint)",
+              }}
+            >
+              <span>Saved boards</span>
+              <span>{savedBoards.length} saved</span>
+            </div>
+            <div className="-mx-2 flex gap-2 overflow-x-auto px-2 pb-2">
+              {savedBoards.map((board) => {
+                const seconds = Math.round(
+                  board.storyboard.scenes.reduce(
+                    (a, s) => a + s.duration,
+                    0,
+                  ) / 30,
+                );
+                return (
+                  <button
+                    key={board.id}
+                    onClick={() => handleLoadSaved(board)}
+                    className="group relative flex shrink-0 flex-col gap-1 rounded-lg border p-3 text-left transition"
+                    style={{
+                      width: 200,
+                      background: "var(--bg-elev)",
+                      borderColor: "var(--rule)",
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className="truncate text-sm"
+                        style={{ color: "var(--ink)" }}
+                      >
+                        {board.name}
+                      </span>
+                      <span
+                        onClick={(e) => handleDeleteSaved(board.id, e)}
+                        className="opacity-0 transition hover:opacity-100 group-hover:opacity-50"
+                        style={{ color: "var(--ink-faint)" }}
+                      >
+                        ×
+                      </span>
+                    </div>
+                    <div
+                      className="font-mono text-[10px] uppercase tracking-widest"
+                      style={{ color: "var(--ink-faint)" }}
+                    >
+                      {board.storyboard.scenes.length}·{seconds}s
+                    </div>
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRename(board.id);
+                      }}
+                      className="absolute right-2 top-2 text-[9px] opacity-0 transition group-hover:opacity-100"
+                      style={{ color: "var(--ink-faint)" }}
+                    >
+                      rename
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
+
+        {/* Floating "current project" indicator */}
+        {hasScenes ? (
+          <button
+            onClick={() => setViewMode("editor")}
+            className="fixed bottom-6 right-6 rounded-full border px-4 py-2 text-xs backdrop-blur-xl transition hover:scale-105"
+            style={{
+              background:
+                "color-mix(in srgb, var(--bg-elev) 80%, transparent)",
+              borderColor:
+                "color-mix(in srgb, var(--ink) 12%, transparent)",
+              color: "var(--ink)",
+              boxShadow: "var(--shadow)",
+            }}
+          >
+            ↻ Current project
+          </button>
+        ) : null}
+      </main>
+    );
+
+    // ─── LEGACY editorial welcome view (kept commented for reference) ───
+    /* eslint-disable */
+    /*
     return (
       <main className="min-h-screen bg-[#F5F1E8] text-[#2D2A26]">
         <div
@@ -698,6 +1317,8 @@ export default function Home() {
         </div>
       </main>
     );
+    */
+    /* eslint-enable */
   }
 
   if (viewMode === "generating") {
@@ -711,162 +1332,331 @@ export default function Home() {
         : "starting…";
 
     return (
-      <main className="min-h-screen bg-[#F5F1E8] text-[#2D2A26]">
+      <main
+        className="relative flex min-h-screen flex-col overflow-x-hidden"
+        style={{ color: "var(--ink)" }}
+      >
+        {/* Atmospheric backdrop (same as welcome / editor) */}
         <div
-          className="absolute inset-0 pointer-events-none"
+          className="pointer-events-none absolute inset-0 -z-10"
+          style={{
+            background:
+              "radial-gradient(ellipse at 15% 0%, #FCDFCB 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, #E8A689 0%, transparent 55%), linear-gradient(180deg, var(--bg) 0%, var(--bg-warm) 100%)",
+          }}
+        />
+        <div
+          className="pointer-events-none absolute inset-0 -z-10 opacity-[0.04] mix-blend-multiply"
           style={{
             backgroundImage:
-              "linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px)",
-            backgroundSize: "80px 80px",
-            backgroundPosition: "center",
+              "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>\")",
           }}
         />
 
-        <div className="relative flex min-h-screen flex-col">
-          <header className="flex items-center justify-between border-b border-[#D4CCBC] px-8 py-5">
-            <div className="font-mono text-[11px] uppercase tracking-widest text-[#6B655C]">
-              motion.saas <span className="text-[#A39C8F]">/</span> generating
-            </div>
-            <div className="flex items-center gap-3 font-mono text-[10px] uppercase tracking-widest text-[#A39C8F]">
-              <span className="flex items-center gap-1.5">
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${
-                    stream.phase === "done"
-                      ? "bg-[#6B655C]"
-                      : "animate-pulse bg-[#C96442]"
-                  }`}
-                />
-                {stream.phase === "done" ? "ready" : "live"}
-              </span>
-              <span>{sourceLabel}</span>
-            </div>
-          </header>
-
-          <div className="flex flex-1 flex-col px-8 pb-12 pt-20 lg:pt-32">
-            <div className="mx-auto w-full max-w-[920px]">
-              <div className="font-mono text-[11px] uppercase tracking-widest text-[#A39C8F]">
-                {stream.phase === "done"
-                  ? "Compiled · opening editor…"
-                  : sceneCount === 0
-                    ? "Director planning the storyboard…"
-                    : `Writing scene ${Math.min(sceneCount + 1, total)} of ${total}`}
-              </div>
-              <h1
-                className="mt-3 flex flex-col font-black tracking-[-0.04em]"
+        {/* Glassy pill nav at top (matches welcome / editor) */}
+        <header className="relative flex justify-center px-6 pt-6">
+          <nav
+            className="flex items-center gap-2 rounded-full border px-3 py-1.5 backdrop-blur-2xl"
+            style={{
+              background:
+                "color-mix(in srgb, var(--bg-elev) 70%, transparent)",
+              borderColor:
+                "color-mix(in srgb, var(--ink) 12%, transparent)",
+              boxShadow: "var(--shadow)",
+            }}
+          >
+            <span
+              className="px-2 py-1 text-base"
+              style={{ color: "var(--ink)" }}
+            >
+              <span
+                className="italic"
                 style={{
-                  fontSize: "clamp(48px, 7vw, 96px)",
-                  lineHeight: 1,
+                  fontFamily: "var(--font-serif), serif",
+                  fontWeight: 500,
                 }}
               >
-                <span className="block pb-[0.08em]">
-                  {storyboard.brand.name || "Storyboard"}
+                motion
+              </span>
+              <span style={{ fontWeight: 600 }}>.saas</span>
+            </span>
+            <span
+              className="font-mono text-[10px] uppercase tracking-widest"
+              style={{ color: "var(--ink-faint)" }}
+            >
+              / generating
+            </span>
+            <span
+              className="ml-2 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest"
+              style={{ color: "var(--ink-muted)" }}
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  stream.phase === "done" ? "" : "animate-pulse"
+                }`}
+                style={{
+                  background:
+                    stream.phase === "done"
+                      ? "var(--ink-muted)"
+                      : "var(--accent)",
+                }}
+              />
+              {stream.phase === "done" ? "ready" : "live"}
+            </span>
+            <span
+              className="font-mono text-[10px] uppercase tracking-widest"
+              style={{ color: "var(--ink-faint)" }}
+            >
+              · {sourceLabel}
+            </span>
+          </nav>
+        </header>
+
+        <div className="relative flex flex-1 flex-col px-8 pb-12 pt-16 lg:pt-24">
+          <div className="mx-auto w-full max-w-[960px]">
+            <div
+              className="font-mono text-[11px] uppercase tracking-widest"
+              style={{ color: "var(--ink-faint)" }}
+            >
+              {stream.phase === "done"
+                ? "Compiled · opening editor…"
+                : sceneCount === 0
+                  ? "Director planning the storyboard…"
+                  : `Writing scene ${Math.min(sceneCount + 1, total)} of ${total}`}
+            </div>
+            <h1
+              className="mt-3 flex flex-col tracking-[-0.04em]"
+              style={{
+                fontSize: "clamp(48px, 8vw, 128px)",
+                lineHeight: 0.96,
+              }}
+            >
+              <span
+                className="block pb-[0.06em] font-black"
+                style={{ color: "var(--ink)" }}
+              >
+                {storyboard.brand.name || "Storyboard"}
+              </span>
+              <span
+                className="block italic"
+                style={{
+                  color: "var(--ink-faint)",
+                  fontFamily: "var(--font-serif), serif",
+                  fontWeight: 500,
+                  letterSpacing: "-0.02em",
+                }}
+              >
+                in progress.
+              </span>
+            </h1>
+
+            <div className="mt-14">
+              <div
+                className="mb-2 flex items-baseline justify-between font-mono text-[11px] uppercase tracking-widest"
+                style={{ color: "var(--ink-faint)" }}
+              >
+                <span>
+                  {sceneCount.toString().padStart(2, "0")} /{" "}
+                  {total.toString().padStart(2, "0")} scenes
                 </span>
-                <span className="block text-[#A39C8F]">in progress.</span>
-              </h1>
-
-              <div className="mt-14">
-                <div className="mb-2 flex items-baseline justify-between font-mono text-[11px] uppercase tracking-widest text-[#A39C8F]">
-                  <span>
-                    {sceneCount.toString().padStart(2, "0")} /{" "}
-                    {total.toString().padStart(2, "0")} scenes
-                  </span>
-                  <span>{Math.round(progress * 100)}%</span>
-                </div>
-                <div className="h-px w-full bg-[#D4CCBC]">
-                  <div
-                    className="h-px bg-[#2D2A26] transition-all duration-500"
-                    style={{ width: `${progress * 100}%` }}
-                  />
-                </div>
+                <span>{Math.round(progress * 100)}%</span>
               </div>
+              <div
+                className="h-px w-full"
+                style={{ background: "var(--rule)" }}
+              >
+                <div
+                  className="h-px transition-all duration-500"
+                  style={{
+                    width: `${progress * 100}%`,
+                    background: "var(--ink)",
+                  }}
+                />
+              </div>
+            </div>
 
-              <div className="mt-10 space-y-1">
-                {trace.director ? (
-                  <div
-                    className="flex items-baseline gap-4 border-b border-[#D4CCBC] py-3 text-sm"
-                    style={{ animation: "sceneArrive 400ms ease-out" }}
-                  >
-                    <span className="flex w-3 items-center justify-center">
-                      <span
-                        className={`block h-1.5 w-1.5 rounded-full ${trace.director.status === "thinking" ? "animate-pulse" : ""}`}
+              <div className="mt-12">
+                {/* ─── Director agent card ─── */}
+                <div
+                  className="relative rounded-2xl border p-4 backdrop-blur transition-all"
+                  style={{
+                    animation: "sceneArrive 400ms ease-out",
+                    background:
+                      "color-mix(in srgb, var(--bg-elev) 80%, transparent)",
+                    borderColor: trace.director?.status === "done"
+                      ? "color-mix(in srgb, var(--ink) 18%, transparent)"
+                      : "color-mix(in srgb, var(--ink) 10%, transparent)",
+                    boxShadow: "var(--shadow)",
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-full"
+                      style={{
+                        background:
+                          trace.director?.status === "done"
+                            ? "var(--ink)"
+                            : "color-mix(in srgb, var(--ink) 8%, transparent)",
+                        color:
+                          trace.director?.status === "done"
+                            ? "var(--bg)"
+                            : "var(--ink-muted)",
+                      }}
+                    >
+                      <span className="text-xs">✦</span>
+                    </span>
+                    <div className="flex-1">
+                      <div
+                        className="font-mono text-[10px] uppercase tracking-widest"
+                        style={{ color: "var(--ink-faint)" }}
+                      >
+                        director agent
+                      </div>
+                      <div
+                        className="mt-0.5 text-sm font-medium"
+                        style={{ color: "var(--ink)" }}
+                      >
+                        {trace.director?.message ?? "Spawning…"}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div
+                        className={`flex items-center justify-end gap-1.5 font-mono text-[10px] uppercase tracking-widest ${trace.director?.status === "thinking" ? "animate-pulse" : ""}`}
                         style={{
-                          background:
-                            trace.director.status === "done"
-                              ? "#2D2A26"
-                              : trace.director.status === "failed"
+                          color:
+                            trace.director?.status === "done"
+                              ? "var(--ink-muted)"
+                              : trace.director?.status === "failed"
                                 ? "#B91C1C"
-                                : "#6B655C",
+                                : "var(--accent)",
                         }}
-                      />
-                    </span>
-                    <span className="w-6 font-mono text-[11px] text-[#A39C8F]">✦</span>
-                    <span className="w-32 font-mono text-[10px] uppercase tracking-widest text-[#6B655C]">
-                      director
-                    </span>
-                    <span className="flex-1 truncate text-[#2D2A26]">
-                      {trace.director.message}
-                    </span>
-                    <span className="font-mono text-[10px] text-[#A39C8F]">
-                      {trace.director.ms !== undefined
-                        ? `${(trace.director.ms / 1000).toFixed(1)}s`
-                        : "…"}
-                    </span>
+                      >
+                        <span
+                          className="h-1.5 w-1.5 rounded-full"
+                          style={{
+                            background:
+                              trace.director?.status === "done"
+                                ? "var(--ink-muted)"
+                                : trace.director?.status === "failed"
+                                  ? "#B91C1C"
+                                  : "var(--accent)",
+                          }}
+                        />
+                        {trace.director?.status === "done"
+                          ? "Ready"
+                          : trace.director?.status === "failed"
+                            ? "Failed"
+                            : "Planning"}
+                      </div>
+                      <div
+                        className="mt-0.5 font-mono text-[10px]"
+                        style={{ color: "var(--ink-faint)" }}
+                      >
+                        {trace.director?.ms !== undefined
+                          ? `${(trace.director.ms / 1000).toFixed(1)}s`
+                          : "—"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ─── Spine: vertical line from director down to the rail ─── */}
+                {total > 0 ? (
+                  <div className="relative mx-auto h-8 w-px">
+                    <div
+                      className="absolute inset-0"
+                      style={{ background: "var(--rule)" }}
+                    />
+                    <div
+                      className="absolute inset-x-0 top-1/2 h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                      style={{ background: "var(--ink-faint)" }}
+                    />
                   </div>
                 ) : null}
-                {storyboard.scenes.map((scene, idx) => {
-                  const sp = trace.specialists[idx];
-                  const dotBg =
-                    sp?.status === "done"
-                      ? "#2D2A26"
-                      : sp?.status === "failed"
-                        ? "#B91C1C"
+
+                {/* ─── Fan-out rail + label ─── */}
+                {total > 0 ? (
+                  <div className="relative flex items-center gap-3 px-1">
+                    <span
+                      className="h-px flex-1"
+                      style={{ background: "var(--rule)" }}
+                    />
+                    <span
+                      className="italic"
+                      style={{
+                        color: "var(--ink-muted)",
+                        fontFamily: "var(--font-serif), serif",
+                        fontWeight: 500,
+                        fontSize: 14,
+                        letterSpacing: "-0.01em",
+                      }}
+                    >
+                      {total} specialist agents in parallel
+                    </span>
+                    <span
+                      className="h-px flex-1"
+                      style={{ background: "var(--rule)" }}
+                    />
+                  </div>
+                ) : null}
+
+                {/* ─── Specialist agent grid (each card hangs from the rail) ─── */}
+                {total > 0 ? (
+                <div
+                  className="mt-0 grid gap-3"
+                  style={{
+                    gridTemplateColumns:
+                      "repeat(auto-fit, minmax(180px, 1fr))",
+                  }}
+                >
+                  {Array.from({ length: total }).map((_, idx) => {
+                    const sp = trace.specialists[idx];
+                    const scene = storyboard.scenes[idx];
+                    const status: "queued" | "thinking" | "done" | "failed" =
+                      scene
+                        ? "done"
                         : sp?.status === "thinking"
-                          ? "#6B655C"
-                          : "transparent";
-                  const dotBorder =
-                    !sp || sp.status === undefined ? "#A39C8F" : "transparent";
-                  return (
-                  <div
-                    key={idx}
-                    className="flex items-baseline gap-4 border-b border-[#D4CCBC] py-3 text-sm"
-                    style={{ animation: "sceneArrive 500ms ease-out" }}
-                  >
-                    <span className="flex w-3 items-center justify-center">
-                      <span
-                        className={`block h-1.5 w-1.5 rounded-full ${sp?.status === "thinking" ? "animate-pulse" : ""}`}
-                        style={{
-                          background: dotBg,
-                          border: `1px solid ${dotBorder === "transparent" ? dotBg : dotBorder}`,
-                        }}
-                      />
-                    </span>
-                    <span className="w-6 font-mono text-[11px] text-[#A39C8F]">
-                      {String(idx + 1).padStart(2, "0")}
-                    </span>
-                    <span className="w-32 font-mono text-[10px] uppercase tracking-widest text-[#6B655C]">
-                      {scene.type === "kineticTitle"
+                          ? "thinking"
+                          : sp?.status === "failed"
+                            ? "failed"
+                            : "queued";
+                    const isDone = status === "done";
+                    const isThinking = status === "thinking";
+                    const isQueued = status === "queued";
+                    const isFailed = status === "failed";
+
+                    const sceneType =
+                      scene?.type ?? sp?.sceneType ?? null;
+                    const shortType = sceneType
+                      ? sceneType === "kineticTitle"
                         ? "title"
-                        : scene.type === "statReveal"
+                        : sceneType === "statReveal"
                           ? "stat"
-                          : scene.type === "featureGrid"
+                          : sceneType === "featureGrid"
                             ? "grid"
-                            : scene.type === "productDemo"
+                            : sceneType === "productDemo"
                               ? "demo"
-                              : scene.type === "testimonialQuote"
+                              : sceneType === "testimonialQuote"
                                 ? "quote"
-                                : scene.type === "logoWall"
+                                : sceneType === "logoWall"
                                   ? "logos"
-                                  : "cta"}
-                    </span>
-                    <span className="flex-1 truncate text-[#2D2A26]">
-                      {scene.type === "kineticTitle"
+                                  : sceneType === "ctaCard"
+                                    ? "cta"
+                                    : sceneType === "multiScript"
+                                      ? "script"
+                                      : sceneType === "productCarousel"
+                                        ? "carousel"
+                                        : "ui"
+                      : "—";
+
+                    const body = scene
+                      ? scene.type === "kineticTitle"
                         ? scene.lines.join(" ")
                         : scene.type === "statReveal"
                           ? `${scene.value}${scene.suffix ?? ""} — ${scene.label}`
                           : scene.type === "featureGrid"
                             ? scene.heading
                             : scene.type === "productDemo"
-                              ? scene.caption ?? `${scene.actions.length} cursor actions`
+                              ? scene.caption ??
+                                `${scene.actions.length} cursor actions`
                               : scene.type === "testimonialQuote"
                                 ? `"${scene.quote}"`
                                 : scene.type === "logoWall"
@@ -874,58 +1664,142 @@ export default function Home() {
                                   : scene.type === "ctaCard"
                                     ? `${scene.headline} → ${scene.buttonLabel}`
                                     : scene.type === "multiScript"
-                                      ? scene.glyphs.map((g) => g.char).join(" → ")
+                                      ? scene.glyphs
+                                          .map((g) => g.char)
+                                          .join(" → ")
                                       : scene.type === "productCarousel"
                                         ? `${scene.products.length} products`
-                                        : `${scene.frame ?? "browser"} showcase`}
-                    </span>
-                    <span className="font-mono text-[10px] text-[#A39C8F]">
-                      {sp?.ms !== undefined
-                        ? `${(sp.ms / 1000).toFixed(1)}s`
-                        : `${Math.round(scene.duration / 30)}s`}
-                    </span>
-                  </div>
-                  );
-                })}
-                {stream.phase === "streaming" && sceneCount < total
-                  ? Array.from({ length: Math.max(1, total - sceneCount) }).map(
-                      (_, i) => (
+                                        : `${scene.frame ?? "browser"} showcase`
+                      : isThinking
+                        ? "Drafting…"
+                        : isFailed
+                          ? "Failed"
+                          : "Queued";
+
+                    return (
+                      <div
+                        key={idx}
+                        className="relative flex flex-col rounded-xl border p-3 transition-all"
+                        style={{
+                          marginTop: 14, // room for the connector notch above
+                          animation: "sceneArrive 500ms ease-out",
+                          background: isDone
+                            ? "var(--bg-elev)"
+                            : "color-mix(in srgb, var(--bg-elev) 40%, transparent)",
+                          borderColor: isDone
+                            ? "color-mix(in srgb, var(--ink) 16%, transparent)"
+                            : "color-mix(in srgb, var(--ink) 8%, transparent)",
+                          boxShadow: isDone ? "var(--shadow)" : "none",
+                          opacity: isQueued ? 0.55 : 1,
+                        }}
+                      >
+                        {/* Connector notch dropping from the rail */}
                         <div
-                          key={`pending-${i}`}
-                          className="flex items-baseline gap-4 border-b border-[#D4CCBC] py-3 text-sm text-[#A39C8F]"
-                        >
-                          <span className="w-6 font-mono text-[11px]">
-                            {String(sceneCount + i + 1).padStart(2, "0")}
+                          className="pointer-events-none absolute left-1/2 -translate-x-1/2"
+                          style={{
+                            top: -14,
+                            width: 1,
+                            height: 14,
+                            background: "var(--rule)",
+                          }}
+                        />
+                        <div
+                          className="pointer-events-none absolute left-1/2 -translate-x-1/2"
+                          style={{
+                            top: -14,
+                            width: 5,
+                            height: 5,
+                            borderRadius: "50%",
+                            background: isDone
+                              ? "var(--ink)"
+                              : isThinking
+                                ? "var(--accent)"
+                                : isFailed
+                                  ? "#B91C1C"
+                                  : "var(--ink-faint)",
+                            transform: "translate(-50%, -2.5px)",
+                          }}
+                        />
+                        <div className="flex items-center justify-between">
+                          <span
+                            className="font-mono text-[10px]"
+                            style={{ color: "var(--ink-faint)" }}
+                          >
+                            {String(idx + 1).padStart(2, "0")}
                           </span>
-                          <span className="w-32 font-mono text-[10px] uppercase tracking-widest">
-                            {i === 0 ? "drafting" : "queued"}
-                          </span>
-                          <span className="flex-1 flex items-center gap-1">
-                            {i === 0 ? (
-                              <>
-                                <span className="inline-block h-1 w-1 animate-pulse rounded-full bg-[#A39C8F]" />
-                                <span className="inline-block h-1 w-1 animate-pulse rounded-full bg-[#A39C8F] [animation-delay:0.2s]" />
-                                <span className="inline-block h-1 w-1 animate-pulse rounded-full bg-[#A39C8F] [animation-delay:0.4s]" />
-                              </>
-                            ) : (
-                              <span>—</span>
-                            )}
-                          </span>
+                          <span
+                            className={`h-1.5 w-1.5 rounded-full ${isThinking ? "animate-pulse" : ""}`}
+                            style={{
+                              background: isDone
+                                ? "var(--ink)"
+                                : isFailed
+                                  ? "#B91C1C"
+                                  : isThinking
+                                    ? "var(--accent)"
+                                    : "var(--ink-faint)",
+                            }}
+                          />
                         </div>
-                      ),
-                    )
-                  : null}
+                        <div
+                          className="mt-2 font-mono text-[10px] uppercase tracking-widest"
+                          style={{
+                            color: isDone
+                              ? "var(--ink-muted)"
+                              : "var(--ink-faint)",
+                          }}
+                        >
+                          {shortType}
+                        </div>
+                        <div
+                          className="mt-1.5 line-clamp-2 text-[12px] leading-snug"
+                          style={{
+                            color: isDone
+                              ? "var(--ink)"
+                              : "var(--ink-faint)",
+                          }}
+                        >
+                          {body}
+                        </div>
+                        <div className="mt-auto pt-3">
+                          <div
+                            className="font-mono text-[10px]"
+                            style={{ color: "var(--ink-faint)" }}
+                          >
+                            {sp?.ms !== undefined
+                              ? `${(sp.ms / 1000).toFixed(1)}s`
+                              : isThinking
+                                ? "…"
+                                : isFailed
+                                  ? "—"
+                                  : "—"}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                ) : null}
               </div>
             </div>
           </div>
 
-          <footer className="mt-auto border-t border-[#D4CCBC] px-8 py-4">
-            <div className="mx-auto flex w-full max-w-[920px] items-center justify-between font-mono text-[10px] uppercase tracking-widest text-[#A39C8F]">
+          <footer
+            className="relative mt-auto border-t px-8 py-4 backdrop-blur"
+            style={{
+              borderColor:
+                "color-mix(in srgb, var(--ink) 8%, transparent)",
+              background:
+                "color-mix(in srgb, var(--bg-elev) 50%, transparent)",
+            }}
+          >
+            <div
+              className="mx-auto flex w-full max-w-[960px] items-center justify-between font-mono text-[10px] uppercase tracking-widest"
+              style={{ color: "var(--ink-faint)" }}
+            >
               <span>streaming · server-sent events</span>
               <span>{sourceLabel}</span>
             </div>
           </footer>
-        </div>
         <style jsx global>{`
           @keyframes sceneArrive {
             from {
@@ -943,148 +1817,279 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-[#F5F1E8] text-[#2D2A26]">
-      <div className="mx-auto max-w-7xl px-6 py-10 lg:px-10">
-        <header className="mb-10 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setViewMode("welcome")}
-              className="rounded-md border border-[#D4CCBC] px-2.5 py-1.5 text-[11px] text-[#6B655C] transition hover:border-[#6B655C] hover:text-[#2D2A26]"
-              title="Back to welcome"
-            >
-              ← Home
-            </button>
-            <div>
-              <div className="text-xs uppercase tracking-[0.2em] text-[#6B655C]">
-                motion.saas — editor
-              </div>
-              <h1 className="mt-2 text-3xl font-bold tracking-tight">
-                Prompt → SaaS launch ad
-              </h1>
-            </div>
-          </div>
-          <div className="text-xs text-[#6B655C]">
-            1080×1920 · 30fps · streaming preview
-          </div>
-        </header>
+    <main
+      className="relative min-h-screen overflow-x-hidden"
+      style={{ color: "var(--ink)" }}
+    >
+      {/* ─── Atmospheric backdrop (same as welcome) ─── */}
+      <div
+        className="pointer-events-none absolute inset-0 -z-10"
+        style={{
+          background:
+            "radial-gradient(ellipse at 15% 0%, #FCDFCB 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, #E8A689 0%, transparent 55%), linear-gradient(180deg, var(--bg) 0%, var(--bg-warm) 100%)",
+        }}
+      />
+      <div
+        className="pointer-events-none absolute inset-0 -z-10 opacity-[0.04] mix-blend-multiply"
+        style={{
+          backgroundImage:
+            "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>\")",
+        }}
+      />
 
-        <div className="grid grid-cols-1 gap-8 lg:grid-cols-[420px_1fr]">
-          <section className="space-y-5">
-            <div>
-              <label className="text-xs uppercase tracking-widest text-[#6B655C]">
+      {/* ─── Glassy top bar ─── */}
+      <header className="sticky top-0 z-20 flex justify-center px-6 pt-6">
+        <nav
+          className="flex w-full max-w-[1400px] items-center gap-2 rounded-full border px-2 py-1.5 backdrop-blur-2xl"
+          style={{
+            background:
+              "color-mix(in srgb, var(--bg-elev) 70%, transparent)",
+            borderColor:
+              "color-mix(in srgb, var(--ink) 12%, transparent)",
+            boxShadow: "var(--shadow)",
+          }}
+        >
+          <button
+            onClick={() => setViewMode("welcome")}
+            className="rounded-full px-3 py-1.5 text-sm transition hover:bg-black/5"
+            style={{ color: "var(--ink-muted)" }}
+            title="Back to welcome"
+          >
+            ← Home
+          </button>
+          <span
+            className="px-2 py-1.5 text-base"
+            style={{ color: "var(--ink)" }}
+          >
+            <span
+              className="italic"
+              style={{
+                fontFamily: "var(--font-serif), serif",
+                fontWeight: 500,
+              }}
+            >
+              motion
+            </span>
+            <span style={{ fontWeight: 600 }}>.saas</span>
+          </span>
+          <span
+            className="ml-1 hidden truncate font-mono text-xs uppercase tracking-widest sm:inline"
+            style={{ color: "var(--ink-faint)" }}
+          >
+            / {storyboard.brand.name?.toLowerCase() || "new"}
+          </span>
+
+          <span
+            className="ml-auto hidden font-mono text-[10px] uppercase tracking-widest sm:inline"
+            style={{ color: "var(--ink-faint)" }}
+          >
+            {ASPECT_META[aspect].width}×{ASPECT_META[aspect].height} · 30fps
+          </span>
+
+          <button
+            onClick={handleSave}
+            disabled={streaming || !hasScenes}
+            className="rounded-full px-3 py-1.5 text-sm transition hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-30"
+            style={{ color: "var(--ink-muted)" }}
+          >
+            {justSavedId ? "Saved ✓" : "Save"}
+          </button>
+          <button
+            onClick={() => setGraphOpen(true)}
+            disabled={streaming || !hasScenes}
+            className="rounded-full px-3 py-1.5 text-sm transition hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-30"
+            style={{ color: "var(--ink-muted)" }}
+          >
+            Graph
+          </button>
+          <button
+            onClick={generate}
+            disabled={streaming || prompt.trim().length === 0}
+            className="rounded-full px-5 py-2 text-sm font-medium transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30"
+            style={{
+              background: "var(--ink)",
+              color: "var(--bg)",
+            }}
+          >
+            {streaming ? "Streaming…" : "Generate"}
+          </button>
+        </nav>
+      </header>
+
+      <div className="mx-auto w-full max-w-[1400px] px-6 py-8 lg:px-10">
+        <div className="grid grid-cols-1 gap-10 lg:grid-cols-[360px_1fr]">
+          <section
+            className="space-y-4 lg:sticky lg:top-24 lg:self-start"
+          >
+            {/* Prompt card */}
+            <div
+              className="rounded-2xl border p-4 backdrop-blur-xl"
+              style={{
+                background:
+                  "color-mix(in srgb, var(--bg-elev) 80%, transparent)",
+                borderColor:
+                  "color-mix(in srgb, var(--ink) 10%, transparent)",
+                boxShadow: "var(--shadow)",
+              }}
+            >
+              <div
+                className="font-mono text-[10px] uppercase tracking-widest"
+                style={{ color: "var(--ink-faint)" }}
+              >
                 Prompt
-              </label>
+              </div>
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 rows={4}
-                className="mt-2 w-full rounded-xl border border-[#D4CCBC] bg-[#FAF6EE] p-3 text-sm outline-none transition focus:border-[#6B655C]"
+                className="mt-2 w-full resize-none bg-transparent text-sm outline-none placeholder:opacity-50"
+                style={{ color: "var(--ink)" }}
                 placeholder="What's the ad for?"
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    if (!streaming && prompt.trim()) generate();
+                  }
+                }}
               />
             </div>
 
-            <div>
-              <label className="text-xs uppercase tracking-widest text-[#6B655C]">
-                Brand name
-              </label>
+            {/* Brand card */}
+            <div
+              className="rounded-2xl border p-4 backdrop-blur-xl"
+              style={{
+                background:
+                  "color-mix(in srgb, var(--bg-elev) 80%, transparent)",
+                borderColor:
+                  "color-mix(in srgb, var(--ink) 10%, transparent)",
+                boxShadow: "var(--shadow)",
+              }}
+            >
+              <div
+                className="font-mono text-[10px] uppercase tracking-widest"
+                style={{ color: "var(--ink-faint)" }}
+              >
+                Brand
+              </div>
               <input
                 value={brandName}
                 onChange={(e) => setBrandName(e.target.value)}
-                className="mt-2 w-full rounded-xl border border-[#D4CCBC] bg-[#FAF6EE] p-3 text-sm outline-none transition focus:border-[#6B655C]"
+                placeholder="Brand name"
+                className="mt-2 w-full bg-transparent text-base outline-none placeholder:opacity-50"
+                style={{ color: "var(--ink)" }}
               />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs uppercase tracking-widest text-[#6B655C]">
-                  Brand color
-                </label>
-                <div className="mt-2 flex items-center gap-2 rounded-xl border border-[#D4CCBC] bg-[#FAF6EE] p-2">
+              <div
+                className="mt-3 flex items-center gap-3 border-t pt-3"
+                style={{
+                  borderColor:
+                    "color-mix(in srgb, var(--ink) 6%, transparent)",
+                }}
+              >
+                <label className="flex flex-1 cursor-pointer items-center gap-2 font-mono text-[11px]">
                   <input
                     type="color"
                     value={color}
                     onChange={(e) => setColor(e.target.value)}
-                    className="h-9 w-9 cursor-pointer rounded-md border-0 bg-transparent"
+                    className="h-6 w-6 cursor-pointer appearance-none rounded-full border-0"
+                    style={{ background: color }}
                   />
-                  <input
-                    value={color}
-                    onChange={(e) => setColor(e.target.value)}
-                    className="flex-1 bg-transparent text-sm outline-none"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="text-xs uppercase tracking-widest text-[#6B655C]">
-                  Accent
+                  <div className="flex flex-col">
+                    <span style={{ color: "var(--ink-faint)" }}>color</span>
+                    <span style={{ color: "var(--ink)" }}>{color}</span>
+                  </div>
                 </label>
-                <div className="mt-2 flex items-center gap-2 rounded-xl border border-[#D4CCBC] bg-[#FAF6EE] p-2">
+                <label className="flex flex-1 cursor-pointer items-center gap-2 font-mono text-[11px]">
                   <input
                     type="color"
                     value={accent}
                     onChange={(e) => setAccent(e.target.value)}
-                    className="h-9 w-9 cursor-pointer rounded-md border-0 bg-transparent"
+                    className="h-6 w-6 cursor-pointer appearance-none rounded-full border-0"
+                    style={{ background: accent }}
                   />
-                  <input
-                    value={accent}
-                    onChange={(e) => setAccent(e.target.value)}
-                    className="flex-1 bg-transparent text-sm outline-none"
-                  />
-                </div>
+                  <div className="flex flex-col">
+                    <span style={{ color: "var(--ink-faint)" }}>accent</span>
+                    <span style={{ color: "var(--ink)" }}>{accent}</span>
+                  </div>
+                </label>
               </div>
             </div>
 
-            <div className="flex gap-2">
-              <button
-                onClick={generate}
-                disabled={streaming}
-                className="relative flex-1 overflow-hidden rounded-xl bg-white py-3 text-sm font-semibold text-black transition hover:bg-[#1a1815] disabled:cursor-not-allowed disabled:opacity-60"
+            {/* Format pills */}
+            <div
+              className="rounded-2xl border p-3 backdrop-blur-xl"
+              style={{
+                background:
+                  "color-mix(in srgb, var(--bg-elev) 80%, transparent)",
+                borderColor:
+                  "color-mix(in srgb, var(--ink) 10%, transparent)",
+                boxShadow: "var(--shadow)",
+              }}
+            >
+              <div
+                className="px-1 pb-2 font-mono text-[10px] uppercase tracking-widest"
+                style={{ color: "var(--ink-faint)" }}
               >
-                <span className="relative z-10">
-                  {streaming ? "Streaming…" : "Generate"}
-                </span>
-                {streaming && stream.total > 0 ? (
-                  <span
-                    className="absolute inset-y-0 left-0 z-0 bg-[#F5F1E8]/20 transition-all"
-                    style={{
-                      width: `${(stream.received / stream.total) * 100}%`,
-                    }}
-                  />
-                ) : null}
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={streaming || !hasScenes}
-                title="Save current storyboard to your library"
-                className="rounded-xl border border-[#D4CCBC] bg-[#FAF6EE] px-4 py-3 text-sm font-medium text-[#2D2A26] transition hover:border-[#6B655C] hover:text-[#2D2A26] disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {justSavedId ? "Saved ✓" : "Save"}
-              </button>
-              <button
-                onClick={() => setGraphOpen(true)}
-                disabled={streaming || !hasScenes}
-                title="Open node graph editor"
-                className="rounded-xl border border-[#D4CCBC] bg-[#FAF6EE] px-4 py-3 text-sm font-medium text-[#2D2A26] transition hover:border-[#6B655C] hover:text-[#2D2A26] disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Graph
-              </button>
+                Format
+              </div>
+              <div className="flex gap-1">
+                {ASPECTS.map((a) => {
+                  const meta = ASPECT_META[a];
+                  const isActive = a === aspect;
+                  return (
+                    <button
+                      key={a}
+                      onClick={() => setAspect(a)}
+                      className="flex-1 rounded-xl px-2 py-2 text-xs transition"
+                      style={{
+                        background: isActive ? "var(--ink)" : "transparent",
+                        color: isActive ? "var(--bg)" : "var(--ink-muted)",
+                      }}
+                    >
+                      <div className="font-medium">{meta.label}</div>
+                      <div
+                        className="font-mono text-[10px]"
+                        style={{ opacity: 0.7 }}
+                      >
+                        {meta.short}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {stream.phase === "error" ? (
-              <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
+              <div
+                className="rounded-xl border p-3 text-xs"
+                style={{
+                  background: "rgba(220, 80, 60, 0.08)",
+                  borderColor: "rgba(220, 80, 60, 0.25)",
+                  color: "#a83a2c",
+                }}
+              >
                 {stream.message}
               </div>
             ) : null}
 
+            {/* Saved boards, collapsible */}
             {savedBoards.length > 0 ? (
-              <div className="pt-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-xs uppercase tracking-widest text-[#6B655C]">
-                    My storyboards
-                  </div>
-                  <div className="text-[10px] text-[#A39C8F]">
-                    {savedBoards.length} saved
-                  </div>
-                </div>
+              <details
+                className="group rounded-2xl border p-3 backdrop-blur-xl"
+                style={{
+                  background:
+                    "color-mix(in srgb, var(--bg-elev) 80%, transparent)",
+                  borderColor:
+                    "color-mix(in srgb, var(--ink) 10%, transparent)",
+                  boxShadow: "var(--shadow)",
+                }}
+              >
+                <summary
+                  className="flex cursor-pointer items-center justify-between font-mono text-[10px] uppercase tracking-widest"
+                  style={{ color: "var(--ink-faint)" }}
+                >
+                  <span>Saved boards</span>
+                  <span>{savedBoards.length}</span>
+                </summary>
                 <div className="mt-3 max-h-72 space-y-1.5 overflow-y-auto pr-1">
                   {savedBoards.map((board) => {
                     const isActive = board.id === activeBoardId;
@@ -1099,11 +2104,14 @@ export default function Home() {
                       <div
                         key={board.id}
                         onClick={() => handleLoadSaved(board)}
-                        className={`group flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-xs transition ${
-                          isActive
-                            ? "border-[#6B655C] bg-[#EFE9DC]"
-                            : "border-[#D4CCBC] bg-[#FAF6EE] hover:border-[#D4CCBC] hover:bg-[#EFE9DC]"
-                        }`}
+                        className="group/row flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-xs transition"
+                        style={{
+                          background: isActive
+                            ? "color-mix(in srgb, var(--ink) 6%, transparent)"
+                            : "transparent",
+                          borderColor:
+                            "color-mix(in srgb, var(--ink) 8%, transparent)",
+                        }}
                       >
                         <span
                           className="h-3 w-3 shrink-0 rounded-full"
@@ -1113,11 +2121,17 @@ export default function Home() {
                           }}
                         />
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-[#2D2A26]">
+                          <div
+                            className="truncate"
+                            style={{ color: "var(--ink)" }}
+                          >
                             {board.name}
                           </div>
-                          <div className="mt-0.5 text-[10px] text-[#6B655C]">
-                            {scenesCount} scenes · {seconds}s ·{" "}
+                          <div
+                            className="mt-0.5 font-mono text-[10px]"
+                            style={{ color: "var(--ink-faint)" }}
+                          >
+                            {scenesCount} · {seconds}s ·{" "}
                             {new Date(board.createdAt).toLocaleDateString(
                               undefined,
                               { month: "short", day: "numeric" },
@@ -1130,14 +2144,16 @@ export default function Home() {
                             handleRename(board.id);
                           }}
                           title="Rename"
-                          className="hidden h-6 w-6 items-center justify-center rounded text-[#A39C8F] transition hover:bg-[#D4CCBC] hover:text-[#2D2A26] group-hover:flex"
+                          className="hidden h-6 w-6 items-center justify-center rounded transition group-hover/row:flex"
+                          style={{ color: "var(--ink-faint)" }}
                         >
                           ✎
                         </button>
                         <button
                           onClick={(e) => handleDeleteSaved(board.id, e)}
                           title="Delete"
-                          className="hidden h-6 w-6 items-center justify-center rounded text-[#A39C8F] transition hover:bg-red-500/20 hover:text-red-300 group-hover:flex"
+                          className="hidden h-6 w-6 items-center justify-center rounded transition hover:text-red-400 group-hover/row:flex"
+                          style={{ color: "var(--ink-faint)" }}
                         >
                           ×
                         </button>
@@ -1145,18 +2161,27 @@ export default function Home() {
                     );
                   })}
                 </div>
-              </div>
+              </details>
             ) : null}
 
-            <div className="pt-3">
-              <div className="flex items-center justify-between">
-                <div className="text-xs uppercase tracking-widest text-[#6B655C]">
-                  Try a preset
-                </div>
-                <div className="text-[10px] text-[#A39C8F]">
-                  {sampleStoryboards.length} ready
-                </div>
-              </div>
+            {/* Presets, collapsible */}
+            <details
+              className="rounded-2xl border p-3 backdrop-blur-xl"
+              style={{
+                background:
+                  "color-mix(in srgb, var(--bg-elev) 80%, transparent)",
+                borderColor:
+                  "color-mix(in srgb, var(--ink) 10%, transparent)",
+                boxShadow: "var(--shadow)",
+              }}
+            >
+              <summary
+                className="flex cursor-pointer items-center justify-between font-mono text-[10px] uppercase tracking-widest"
+                style={{ color: "var(--ink-faint)" }}
+              >
+                <span>Try a preset</span>
+                <span>{sampleStoryboards.length}</span>
+              </summary>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 {sampleStoryboards.map((sb) => {
                   const sceneCount = sb.scenes.length;
@@ -1167,9 +2192,11 @@ export default function Home() {
                     <button
                       key={sb.brand.name}
                       onClick={() => pickPreset(sb)}
-                      className="group relative overflow-hidden rounded-xl border border-[#D4CCBC] bg-[#FAF6EE] text-left transition hover:-translate-y-0.5 hover:border-[#6B655C]"
+                      className="group/preset relative overflow-hidden rounded-xl border text-left transition hover:-translate-y-0.5"
                       style={{
-                        boxShadow: `0 10px 30px -15px ${sb.brand.accent}55, inset 0 0 0 1px ${sb.brand.accent}22`,
+                        borderColor:
+                          "color-mix(in srgb, var(--ink) 8%, transparent)",
+                        boxShadow: `0 8px 24px -12px ${sb.brand.accent}55`,
                       }}
                     >
                       <div
@@ -1184,67 +2211,69 @@ export default function Home() {
                       >
                         {seconds}s
                       </div>
-                      <div className="px-3 py-2.5">
+                      <div
+                        className="px-3 py-2"
+                        style={{ background: "var(--bg-elev)" }}
+                      >
                         <div
                           className="text-sm font-semibold tracking-tight"
                           style={{ color: sb.brand.accent }}
                         >
                           {sb.brand.name}
                         </div>
-                        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-[#6B655C]">
-                          <span
-                            className="inline-block h-1.5 w-1.5 rounded-full"
-                            style={{ background: sb.brand.color }}
-                          />
+                        <div
+                          className="mt-0.5 font-mono text-[10px]"
+                          style={{ color: "var(--ink-faint)" }}
+                        >
                           {sceneCount} scenes
                         </div>
                       </div>
-                      <div
-                        className="absolute inset-x-0 bottom-0 h-0.5 origin-left scale-x-0 transition-transform duration-300 group-hover:scale-x-100"
-                        style={{ background: sb.brand.accent }}
-                      />
                     </button>
                   );
                 })}
               </div>
-            </div>
-
-            <details className="rounded-xl border border-[#D4CCBC] bg-[#FAF6EE] p-3 text-xs text-[#6B655C]">
-              <summary className="cursor-pointer text-[#2D2A26]">
-                Current storyboard JSON
-              </summary>
-              <pre className="mt-3 max-h-72 overflow-auto text-[10px] leading-relaxed text-[#6B655C]">
-                {JSON.stringify(storyboard, null, 2)}
-              </pre>
             </details>
           </section>
 
-          <section>
-            <div className="mx-auto max-w-[440px]">
-              {(streaming || stream.phase === "done") && (
-                <div className="mb-4 flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`h-2 w-2 rounded-full ${
-                        streaming
-                          ? "animate-pulse bg-[#C96442]"
-                          : "bg-white/30"
-                      }`}
-                    />
-                    <span className="text-[#6B655C]">
-                      {streaming
-                        ? `Streaming from ${stream.source === "claude" ? "Claude" : stream.source === "gemini" ? "Gemini" : "mock generator"}`
-                        : `Generated by ${stream.phase === "done" ? (stream.source === "claude" ? "Claude" : stream.source === "gemini" ? "Gemini" : "mock generator") : ""}`}
-                    </span>
-                  </div>
-                  {streaming && stream.total > 0 ? (
-                    <span className="text-[#6B655C]">
-                      {stream.received} / {stream.total} scenes
-                    </span>
-                  ) : null}
+          <section className="min-w-0">
+            <div className="mx-auto w-full max-w-[480px]">
+              {/* Source / progress strip */}
+              <div className="mb-4 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      streaming ? "animate-pulse" : ""
+                    }`}
+                    style={{
+                      background: streaming
+                        ? "var(--accent)"
+                        : hasScenes
+                          ? "color-mix(in srgb, var(--ink) 30%, transparent)"
+                          : "color-mix(in srgb, var(--ink) 10%, transparent)",
+                    }}
+                  />
+                  <span style={{ color: "var(--ink-muted)" }}>
+                    {streaming
+                      ? `Streaming from ${humanSourceName(stream.source)}`
+                      : stream.phase === "done"
+                        ? `Generated by ${humanSourceName(stream.source)}`
+                        : hasScenes
+                          ? "Ready"
+                          : "Waiting for a prompt"}
+                  </span>
                 </div>
-              )}
+                {streaming && stream.total > 0 ? (
+                  <span style={{ color: "var(--ink-muted)" }}>
+                    {stream.received} / {stream.total} scenes
+                  </span>
+                ) : hasScenes ? (
+                  <span style={{ color: "var(--ink-faint)" }}>
+                    {storyboard.scenes.length} scenes · {totalSeconds}s
+                  </span>
+                ) : null}
+              </div>
 
+              {/* Scene progress dots */}
               {hasScenes ? (
                 <div className="mb-3 flex gap-1.5">
                   {storyboard.scenes.map((s, i) => (
@@ -1265,8 +2294,12 @@ export default function Home() {
                         (_, i) => (
                           <div
                             key={`pending-${i}`}
-                            className="flex-1 rounded-full bg-[#D4CCBC]"
-                            style={{ height: 4 }}
+                            className="flex-1 rounded-full"
+                            style={{
+                              height: 4,
+                              background:
+                                "color-mix(in srgb, var(--ink) 12%, transparent)",
+                            }}
                           />
                         ),
                       )
@@ -1274,25 +2307,43 @@ export default function Home() {
                 </div>
               ) : null}
 
-              {hasScenes ? (
-                <PlayerWrapper
-                  key={playerKey}
-                  storyboard={storyboard}
-                  aspect={aspect}
-                />
-              ) : (
-                <PlayerSkeleton />
-              )}
+              {/* Player in a glassy frame */}
+              <div
+                className="rounded-2xl border p-3 backdrop-blur-xl"
+                style={{
+                  background:
+                    "color-mix(in srgb, var(--bg-elev) 70%, transparent)",
+                  borderColor:
+                    "color-mix(in srgb, var(--ink) 10%, transparent)",
+                  boxShadow: "var(--shadow)",
+                }}
+              >
+                {hasScenes ? (
+                  <PlayerWrapper
+                    key={playerKey}
+                    storyboard={storyboard}
+                    aspect={aspect}
+                  />
+                ) : (
+                  <PlayerSkeleton />
+                )}
+              </div>
             </div>
 
-            <div className="mx-auto mt-4 max-w-[440px]">
+            <div className="mx-auto mt-4 w-full max-w-[480px]">
               {hasScenes ? (
                 <div className="space-y-1.5">
                   {storyboard.scenes.map((s, i) => (
                     <div
                       key={i}
-                      className="flex items-center gap-3 rounded-lg border border-[#D4CCBC] bg-[#FAF6EE] px-3 py-2 text-xs"
-                      style={{ animation: "sceneArrive 500ms ease-out" }}
+                      className="flex items-center gap-3 rounded-lg border px-3 py-2 text-xs backdrop-blur"
+                      style={{
+                        animation: "sceneArrive 500ms ease-out",
+                        background:
+                          "color-mix(in srgb, var(--bg-elev) 70%, transparent)",
+                        borderColor:
+                          "color-mix(in srgb, var(--ink) 8%, transparent)",
+                      }}
                     >
                       <span
                         className="flex h-6 w-6 items-center justify-center rounded font-mono text-[10px]"
@@ -1303,10 +2354,13 @@ export default function Home() {
                       >
                         {sceneIcon(s)}
                       </span>
-                      <span className="flex-1 truncate text-[#2D2A26]">
+                      <span
+                        className="flex-1 truncate"
+                        style={{ color: "var(--ink)" }}
+                      >
                         {sceneLabel(s)}
                       </span>
-                      <span className="text-[#A39C8F]">
+                      <span style={{ color: "var(--ink-faint)" }}>
                         {Math.round(s.duration / 30)}s
                       </span>
                     </div>
@@ -1316,21 +2370,30 @@ export default function Home() {
                         (_, i) => (
                           <div
                             key={`pending-${i}`}
-                            className="flex items-center gap-3 rounded-lg border border-[#D4CCBC] bg-white/[0.01] px-3 py-2 text-xs text-[#A39C8F]"
+                            className="flex items-center gap-3 rounded-lg border px-3 py-2 text-xs"
+                            style={{
+                              borderColor:
+                                "color-mix(in srgb, var(--ink) 8%, transparent)",
+                              color: "var(--ink-faint)",
+                            }}
                           >
-                            <span className="flex h-6 w-6 items-center justify-center rounded bg-white/5">
-                              <span className="h-1 w-1 animate-pulse rounded-full bg-[#A39C8F]" />
+                            <span
+                              className="flex h-6 w-6 items-center justify-center rounded"
+                              style={{
+                                background:
+                                  "color-mix(in srgb, var(--ink) 4%, transparent)",
+                              }}
+                            >
+                              <span
+                                className="h-1 w-1 animate-pulse rounded-full"
+                                style={{ background: "var(--ink-faint)" }}
+                              />
                             </span>
                             <span className="flex-1">Drafting next scene…</span>
                           </div>
                         ),
                       )
                     : null}
-                </div>
-              ) : null}
-              {!streaming && stream.phase !== "error" ? (
-                <div className="mt-4 text-center text-xs text-[#6B655C]">
-                  {storyboard.scenes.length} scenes · {totalSeconds}s
                 </div>
               ) : null}
             </div>

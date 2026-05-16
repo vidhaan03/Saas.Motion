@@ -242,9 +242,13 @@ export const uiShowcaseSchema = z.object({
         frame: z.enum(uiShowcaseFrames).optional(),
         // Transition that brings this shot into view (first shot uses "fade")
         transitionIn: z.enum(uiShowcaseTransitions).optional(),
-        // Optional zoom: slowly zoom toward (x, y) at the given scale during
-        // this shot's segment. Coordinates are percentages (0-100) inside
-        // the screenshot itself.
+        // Media type — image (default) or video. When "video", url must point
+        // to an mp4/webm; Remotion's <Video> handles playback.
+        mediaType: z.enum(["image", "video"]).optional(),
+        // Optional per-shot caption (separate from the scene-level caption).
+        shotCaption: z.string().optional(),
+        // Optional simple zoom: zoom toward (x, y) at the given scale over the
+        // shot's segment. Legacy; pan supersedes this when both are set.
         zoom: z
           .object({
             x: z.number().min(0).max(100),
@@ -252,14 +256,74 @@ export const uiShowcaseSchema = z.object({
             scale: z.number().min(1).max(3),
           })
           .optional(),
+        // Ken Burns-style pan keyframes — interpolates transform-origin and
+        // scale from `from` to `to` over the shot's duration.
+        pan: z
+          .object({
+            from: z.object({
+              x: z.number().min(0).max(100),
+              y: z.number().min(0).max(100),
+              scale: z.number().min(0.5).max(4),
+            }),
+            to: z.object({
+              x: z.number().min(0).max(100),
+              y: z.number().min(0).max(100),
+              scale: z.number().min(0.5).max(4),
+            }),
+          })
+          .optional(),
         // Optional frame position — moves the entire device frame inside the
         // canvas. x/y are offsets in percent of canvas (50/50 = centered).
-        // scale: 1 = natural size, 0.7 = smaller, 1.3 = larger.
         framePosition: z
           .object({
             x: z.number().min(0).max(100),
             y: z.number().min(0).max(100),
             scale: z.number().min(0.3).max(1.5),
+          })
+          .optional(),
+        // Spotlight rectangle — darkens everything except a rectangle of the
+        // screenshot. Coords are %; intensity is the dim alpha (0..1).
+        spotlight: z
+          .object({
+            x: z.number().min(0).max(100),
+            y: z.number().min(0).max(100),
+            w: z.number().min(1).max(100),
+            h: z.number().min(1).max(100),
+            intensity: z.number().min(0).max(1).optional(),
+            appearAt: z.number().min(0).max(1).optional(),
+          })
+          .optional(),
+        // Annotation callouts pinned to (x, y) on the screenshot.
+        annotations: z
+          .array(
+            z.object({
+              x: z.number().min(0).max(100),
+              y: z.number().min(0).max(100),
+              text: z.string(),
+              side: z.enum(["top", "right", "bottom", "left"]).optional(),
+              appearAt: z.number().min(0).max(1).optional(),
+              color: z.string().optional(),
+            }),
+          )
+          .optional(),
+        // Cursor walkthrough — synthetic mouse moves between hotspots with
+        // optional click + zoom-on-click. `at` is 0..1 progress through the
+        // shot. Click actions render an expanding tap ring; the cursor
+        // animates smoothly between successive actions (cursor trail).
+        cursor: z
+          .object({
+            actions: z
+              .array(
+                z.object({
+                  at: z.number().min(0).max(1),
+                  type: z.enum(["move", "click", "zoom"]),
+                  x: z.number().min(0).max(100),
+                  y: z.number().min(0).max(100),
+                  label: z.string().optional(),
+                  scale: z.number().min(1).max(3).optional(),
+                }),
+              )
+              .max(10),
           })
           .optional(),
         // Optional duration weight (fraction). If omitted, time is split evenly.
