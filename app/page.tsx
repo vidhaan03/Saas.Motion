@@ -160,6 +160,19 @@ export default function Home() {
   const [accent, setAccent] = useState("#22D3EE");
   const [stream, setStream] = useState<StreamState>({ phase: "idle" });
   const [playerKey, setPlayerKey] = useState(0);
+  const [trace, setTrace] = useState<{
+    director:
+      | { status: "thinking" | "done" | "failed"; message: string; ms?: number }
+      | null;
+    specialists: Record<
+      number,
+      {
+        status: "thinking" | "done" | "failed";
+        sceneType: Scene["type"];
+        ms?: number;
+      }
+    >;
+  }>({ director: null, specialists: {} });
   const [savedBoards, setSavedBoards] = useState<SavedBoard[]>([]);
   const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
   const [justSavedId, setJustSavedId] = useState<string | null>(null);
@@ -230,6 +243,7 @@ export default function Home() {
     setStream({ phase: "streaming", total: 0, received: 0, source: "mock" });
     setActiveBoardId(null);
     setViewMode("generating");
+    setTrace({ director: null, specialists: {} });
     setStoryboard({
       brand: { name: brandName, color, accent },
       scenes: [],
@@ -295,6 +309,29 @@ export default function Home() {
             setPlayerKey((k) => k + 1);
             setStream({ phase: "done", source });
             window.setTimeout(() => setViewMode("editor"), 600);
+          } else if (event.type === "agent") {
+            if (event.agent === "director") {
+              setTrace((prev) => ({
+                ...prev,
+                director: {
+                  status: event.status,
+                  message: event.message,
+                  ms: "ms" in event ? event.ms : undefined,
+                },
+              }));
+            } else if (event.agent === "specialist") {
+              setTrace((prev) => ({
+                ...prev,
+                specialists: {
+                  ...prev.specialists,
+                  [event.index]: {
+                    status: event.status,
+                    sceneType: event.sceneType,
+                    ms: "ms" in event ? event.ms : undefined,
+                  },
+                },
+              }));
+            }
           } else if (event.type === "error") {
             throw new Error(event.message);
           }
@@ -744,12 +781,65 @@ export default function Home() {
               </div>
 
               <div className="mt-10 space-y-1">
-                {storyboard.scenes.map((scene, idx) => (
+                {trace.director ? (
+                  <div
+                    className="flex items-baseline gap-4 border-b border-[#D4CCBC] py-3 text-sm"
+                    style={{ animation: "sceneArrive 400ms ease-out" }}
+                  >
+                    <span className="flex w-3 items-center justify-center">
+                      <span
+                        className={`block h-1.5 w-1.5 rounded-full ${trace.director.status === "thinking" ? "animate-pulse" : ""}`}
+                        style={{
+                          background:
+                            trace.director.status === "done"
+                              ? "#2D2A26"
+                              : trace.director.status === "failed"
+                                ? "#B91C1C"
+                                : "#6B655C",
+                        }}
+                      />
+                    </span>
+                    <span className="w-6 font-mono text-[11px] text-[#A39C8F]">✦</span>
+                    <span className="w-32 font-mono text-[10px] uppercase tracking-widest text-[#6B655C]">
+                      director
+                    </span>
+                    <span className="flex-1 truncate text-[#2D2A26]">
+                      {trace.director.message}
+                    </span>
+                    <span className="font-mono text-[10px] text-[#A39C8F]">
+                      {trace.director.ms !== undefined
+                        ? `${(trace.director.ms / 1000).toFixed(1)}s`
+                        : "…"}
+                    </span>
+                  </div>
+                ) : null}
+                {storyboard.scenes.map((scene, idx) => {
+                  const sp = trace.specialists[idx];
+                  const dotBg =
+                    sp?.status === "done"
+                      ? "#2D2A26"
+                      : sp?.status === "failed"
+                        ? "#B91C1C"
+                        : sp?.status === "thinking"
+                          ? "#6B655C"
+                          : "transparent";
+                  const dotBorder =
+                    !sp || sp.status === undefined ? "#A39C8F" : "transparent";
+                  return (
                   <div
                     key={idx}
                     className="flex items-baseline gap-4 border-b border-[#D4CCBC] py-3 text-sm"
                     style={{ animation: "sceneArrive 500ms ease-out" }}
                   >
+                    <span className="flex w-3 items-center justify-center">
+                      <span
+                        className={`block h-1.5 w-1.5 rounded-full ${sp?.status === "thinking" ? "animate-pulse" : ""}`}
+                        style={{
+                          background: dotBg,
+                          border: `1px solid ${dotBorder === "transparent" ? dotBg : dotBorder}`,
+                        }}
+                      />
+                    </span>
                     <span className="w-6 font-mono text-[11px] text-[#A39C8F]">
                       {String(idx + 1).padStart(2, "0")}
                     </span>
@@ -790,10 +880,13 @@ export default function Home() {
                                         : `${scene.frame ?? "browser"} showcase`}
                     </span>
                     <span className="font-mono text-[10px] text-[#A39C8F]">
-                      {Math.round(scene.duration / 30)}s
+                      {sp?.ms !== undefined
+                        ? `${(sp.ms / 1000).toFixed(1)}s`
+                        : `${Math.round(scene.duration / 30)}s`}
                     </span>
                   </div>
-                ))}
+                  );
+                })}
                 {stream.phase === "streaming" && sceneCount < total
                   ? Array.from({ length: Math.max(1, total - sceneCount) }).map(
                       (_, i) => (

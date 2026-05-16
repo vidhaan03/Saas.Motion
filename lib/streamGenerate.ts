@@ -50,11 +50,60 @@ export type StreamSource =
   | "agentic-nim" // director + specialists, all on NIM Gemma
   | "agentic-mixed"; // some agents fell back to Gemini
 
+export type AgentEvent =
+  | {
+      type: "agent";
+      agent: "director";
+      status: "thinking";
+      message: string;
+    }
+  | {
+      type: "agent";
+      agent: "director";
+      status: "done";
+      message: string;
+      ms: number;
+      source: "nim-gemma" | "gemini";
+    }
+  | {
+      type: "agent";
+      agent: "director";
+      status: "failed";
+      message: string;
+    }
+  | {
+      type: "agent";
+      agent: "specialist";
+      index: number;
+      sceneType: Scene["type"];
+      status: "thinking";
+      message: string;
+    }
+  | {
+      type: "agent";
+      agent: "specialist";
+      index: number;
+      sceneType: Scene["type"];
+      status: "done";
+      message: string;
+      ms: number;
+      source: "nim-gemma" | "gemini";
+    }
+  | {
+      type: "agent";
+      agent: "specialist";
+      index: number;
+      sceneType: Scene["type"];
+      status: "failed";
+      message: string;
+    };
+
 export type StreamEvent =
   | { type: "meta"; source: StreamSource; total: number }
   | { type: "scene"; scene: Scene; index: number }
   | { type: "done"; storyboard: Storyboard }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | AgentEvent;
 
 // ───────── Generic JSON helpers ─────────
 
@@ -363,9 +412,23 @@ export async function* streamStoryboard(
   brand: Brand,
 ): AsyncGenerator<StreamEvent> {
   // Phase 1: Director (sequential — gates the rest).
+  const directorStart = Date.now();
+  yield {
+    type: "agent",
+    agent: "director",
+    status: "thinking",
+    message: "Planning scene structure…",
+  };
+
   const directorResult = await runDirector(prompt, brand);
 
   if (!directorResult) {
+    yield {
+      type: "agent",
+      agent: "director",
+      status: "failed",
+      message: "Director call failed — falling back to mock",
+    };
     // Director failed completely — fall back to deterministic mock.
     const storyboard = mockGenerate(prompt, brand);
     yield { type: "meta", source: "mock", total: storyboard.scenes.length };
@@ -377,6 +440,15 @@ export async function* streamStoryboard(
   }
 
   const plan = directorResult.plan;
+  const flow = plan.map((p) => p.type).join(" → ");
+  yield {
+    type: "agent",
+    agent: "director",
+    status: "done",
+    message: `Picked ${plan.length} scenes · ${flow}`,
+    ms: Date.now() - directorStart,
+    source: directorResult.source,
+  };
 
   // Tentative source — flipped to "agentic-mixed" if any specialist diverges.
   let metaSource: StreamSource =
@@ -384,14 +456,28 @@ export async function* streamStoryboard(
 
   yield { type: "meta", source: metaSource, total: plan.length };
 
+  // Announce all specialists as thinking the moment the plan is known.
+  for (let i = 0; i < plan.length; i++) {
+    yield {
+      type: "agent",
+      agent: "specialist",
+      index: i,
+      sceneType: plan[i].type,
+      status: "thinking",
+      message: `Writing ${plan[i].type}…`,
+    };
+  }
+
   // Phase 2: Parallel specialists with race-yield.
   // pending = idx → promise resolving to { idx, result } where result may be
   // a successful { scene, source } or null (specialist failed → drop scene).
+  const specialistStarts = new Map<number, number>();
   const pending = new Map<
     number,
     Promise<{ idx: number; result: Awaited<ReturnType<typeof runSpecialist>> }>
   >();
   plan.forEach((p, idx) => {
+    specialistStarts.set(idx, Date.now());
     pending.set(
       idx,
       runSpecialist(p, brand)
@@ -407,12 +493,32 @@ export async function* streamStoryboard(
   while (pending.size > 0) {
     const winner = await Promise.race(pending.values());
     pending.delete(winner.idx);
+    const elapsed = Date.now() - (specialistStarts.get(winner.idx) ?? Date.now());
 
     if (winner.result) {
       scenes[winner.idx] = winner.result.scene;
       if (winner.result.source === "gemini") sawGemini = true;
       if (winner.result.source === "nim-gemma") sawGemma = true;
+      yield {
+        type: "agent",
+        agent: "specialist",
+        index: winner.idx,
+        sceneType: plan[winner.idx].type,
+        status: "done",
+        message: `${plan[winner.idx].type} ready`,
+        ms: elapsed,
+        source: winner.result.source,
+      };
       yield { type: "scene", scene: winner.result.scene, index: winner.idx };
+    } else {
+      yield {
+        type: "agent",
+        agent: "specialist",
+        index: winner.idx,
+        sceneType: plan[winner.idx].type,
+        status: "failed",
+        message: `${plan[winner.idx].type} failed — scene dropped`,
+      };
     }
     // null result → specialist failed → scene dropped per agreed policy.
   }
