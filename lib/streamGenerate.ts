@@ -130,6 +130,13 @@ const tryParseJson = (text: string): unknown | null => {
   }
 };
 
+// Per-call timeouts. NIM cold-starts can be slow; without a client-side
+// abort the fetch sits forever waiting on the server. 15s is enough for
+// a warm call to finish, short enough to fail through to Gemini on a cold
+// NIM. Override via env if needed.
+const NIM_TIMEOUT_MS = Number(process.env.NVIDIA_NIM_TIMEOUT_MS ?? "15000");
+const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS ?? "20000");
+
 // Single NIM chat call. Returns the raw assistant text or throws.
 // Models are OpenAI-compatible at /v1/chat/completions.
 const callNvidiaChat = async (
@@ -162,6 +169,7 @@ const callNvidiaChat = async (
       max_tokens: maxTokens,
       response_format: { type: "json_object" },
     }),
+    signal: AbortSignal.timeout(NIM_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -200,6 +208,7 @@ const callGeminiChat = async (
         responseMimeType: "application/json",
       },
     }),
+    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
@@ -294,7 +303,9 @@ ${prompt}
 
 Produce the plan JSON now.`;
 
-  const out = await agentCall(DIRECTOR_SYSTEM, user, 800);
+  // 5-scene plan JSON is ~250 tokens; 400 leaves headroom without making
+  // the model think it has space to ramble.
+  const out = await agentCall(DIRECTOR_SYSTEM, user, 400);
   if (!out) return null;
 
   const parsed = tryParseJson(out.text) as { plan?: unknown } | null;
