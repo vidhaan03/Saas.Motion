@@ -158,6 +158,19 @@ const KineticTitleEditor: React.FC<{
           maxLength={4}
         />
       </InputRow>
+      <InputRow label="Accent word (auto if blank)">
+        <Field
+          value={scene.accentWord ?? ""}
+          onChange={(e) => {
+            const trimmed = e.target.value;
+            onChange({
+              ...scene,
+              accentWord: trimmed ? trimmed : undefined,
+            });
+          }}
+          placeholder="auto · longest word"
+        />
+      </InputRow>
       <div className="grid grid-cols-2 gap-2">
         <VariantRow
           value={scene.variant}
@@ -1905,6 +1918,113 @@ const ShotAnimationControls: React.FC<{
   );
 };
 
+const AI_SHOT_MOTIONS = [
+  "push-in",
+  "pull-out",
+  "pan-left",
+  "pan-right",
+  "static",
+] as const;
+const AI_SHOT_OVERLAYS = ["dark", "light", "scrim", "none"] as const;
+const AI_SHOT_CAPTION_POSITIONS = ["bottom", "center", "top"] as const;
+
+const AiShotEditor: React.FC<{
+  scene: Extract<Scene, { type: "aiShot" }>;
+  onChange: (next: Scene) => void;
+}> = ({ scene, onChange }) => (
+  <div className="space-y-3">
+    <InputRow label="Caption (overlay headline)">
+      <Field
+        value={scene.caption ?? ""}
+        onChange={(e) =>
+          onChange({ ...scene, caption: e.target.value || undefined })
+        }
+        placeholder="Your headline here."
+      />
+    </InputRow>
+    <InputRow label="Subcaption (optional)">
+      <Field
+        value={scene.subcaption ?? ""}
+        onChange={(e) =>
+          onChange({ ...scene, subcaption: e.target.value || undefined })
+        }
+        placeholder="Smaller supporting line."
+      />
+    </InputRow>
+    <InputRow label="Image prompt (FLUX)">
+      <Field
+        value={scene.imagePrompt}
+        onChange={(e) => onChange({ ...scene, imagePrompt: e.target.value })}
+        placeholder="Cinematic motion-graphic style, brand colours, abstract"
+      />
+    </InputRow>
+    {scene.imageUrl ? (
+      <div className="overflow-hidden rounded-lg border border-white/10">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={scene.imageUrl}
+          alt=""
+          className="w-full"
+          style={{ maxHeight: 200, objectFit: "cover" }}
+        />
+      </div>
+    ) : (
+      <div className="rounded-lg border border-dashed border-white/10 p-3 text-center text-[11px] text-white/40">
+        No image generated yet. Re-run Generate to fetch from FLUX.
+      </div>
+    )}
+    <div className="grid grid-cols-2 gap-2">
+      <InputRow label="Motion">
+        <Select
+          value={scene.motion ?? "push-in"}
+          options={AI_SHOT_MOTIONS}
+          onChange={(v) =>
+            onChange({
+              ...scene,
+              motion: v as (typeof AI_SHOT_MOTIONS)[number],
+            })
+          }
+        />
+      </InputRow>
+      <InputRow label="Overlay">
+        <Select
+          value={scene.overlay ?? "dark"}
+          options={AI_SHOT_OVERLAYS}
+          onChange={(v) =>
+            onChange({
+              ...scene,
+              overlay: v as (typeof AI_SHOT_OVERLAYS)[number],
+            })
+          }
+        />
+      </InputRow>
+    </div>
+    <InputRow label="Caption position">
+      <Select
+        value={scene.captionPosition ?? "bottom"}
+        options={AI_SHOT_CAPTION_POSITIONS}
+        onChange={(v) =>
+          onChange({
+            ...scene,
+            captionPosition: v as (typeof AI_SHOT_CAPTION_POSITIONS)[number],
+          })
+        }
+      />
+    </InputRow>
+    <SfxRow
+      value={scene.sfx}
+      onChange={(v) => onChange({ ...scene, sfx: v as typeof scene.sfx })}
+    />
+    <InputRow label="Duration (frames @ 30fps)">
+      <NumField
+        value={scene.duration}
+        onChange={(n) => onChange({ ...scene, duration: Math.max(30, n) })}
+        min={30}
+      />
+    </InputRow>
+  </div>
+);
+
 const UiShowcaseEditor: React.FC<{
   scene: Extract<Scene, { type: "uiShowcase" }>;
   onChange: (next: Scene) => void;
@@ -3061,8 +3181,10 @@ export const SceneEditor: React.FC<Props> = ({
         </div>
       ) : scene.type === "productCarousel" ? (
         <ProductCarouselEditor scene={scene} onChange={onChange} />
-      ) : (
+      ) : scene.type === "uiShowcase" ? (
         <UiShowcaseEditor scene={scene} onChange={onChange} />
+      ) : (
+        <AiShotEditor scene={scene} onChange={onChange} />
       )}
     </div>
   );

@@ -1,0 +1,97 @@
+# API routes
+
+Three endpoints. All accept JSON, return JSON (except `/api/generate` which returns SSE).
+
+## POST `/api/generate`
+
+Generates a storyboard for a prompt + brand kit. Returns a Server-Sent Events stream.
+
+### Request
+
+```json
+{
+  "prompt": "Launch ad for Beacon, our async standup tool used by 28000 teams",
+  "brand": {
+    "name": "Beacon",
+    "color": "#0EA5E9",
+    "accent": "#22D3EE"
+  }
+}
+```
+
+Validated against `requestSchema` in the route. Invalid bodies return 400.
+
+### Response
+
+`text/event-stream`. Each line is `data: <JSON>\n\n`. See [Agent pipeline](/docs/agents) for the event grammar.
+
+```
+data: {"type":"agent","agent":"director","status":"thinking","message":"Planning scene structure…"}
+data: {"type":"agent","agent":"director","status":"done","message":"Picked 5 scenes…","ms":2341,"source":"gemini"}
+data: {"type":"meta","source":"agentic-gemini","total":5}
+data: {"type":"agent","agent":"specialist","index":0,"sceneType":"statReveal","status":"thinking",…}
+data: {"type":"agent","agent":"specialist","index":0,"sceneType":"statReveal","status":"done",…}
+data: {"type":"scene","scene":{…},"index":0}
+…
+data: {"type":"done","storyboard":{…}}
+```
+
+### Error modes
+
+- 400 — request body fails zod validation
+- 500 — orchestrator threw before any event was yielded (rare; mock fallback usually catches this)
+- An in-stream `{"type":"error","message":"…"}` — recoverable failure mid-generation; UI shows a toast and stops streaming
+- Specialist failures are **not** errors. They're trace events of status `failed` and the scene is silently dropped.
+
+## POST `/api/vision`
+
+Takes an uploaded product screenshot and returns plausible cursor coordinates for the `productDemo` scene. Used by the UI when the user uploads an image to drive a demo scene.
+
+### Request
+
+`multipart/form-data` with:
+
+- `image` — PNG/JPG of the product UI
+- `intent` (optional) — natural-language description of what to highlight, e.g. "show the filter button then the export menu"
+
+### Response
+
+```json
+{
+  "actions": [
+    { "at": 0,  "type": "move",  "x": 100, "y": 146 },
+    { "at": 28, "type": "click", "x": 100, "y": 146, "label": "Filters" },
+    { "at": 35, "type": "zoom",  "x": 100, "y": 146, "scale": 1.4 }
+  ],
+  "caption": "Filter by status in two clicks."
+}
+```
+
+Coordinates are in the 1000×600 logical grid used by `ProductDemo`.
+
+### Implementation
+
+Uses a vision-capable LLM (Gemini 1.5/2.5 Pro with image input). The agent sees the screenshot and returns coordinates of clickable elements in the image, then synthesizes a short cursor path that highlights them.
+
+## POST `/api/upload`
+
+Generic file upload for screenshots. Stores under `public/uploads/<hash>.<ext>` and returns the URL.
+
+### Request
+
+`multipart/form-data` with a single `file` field.
+
+### Response
+
+```json
+{ "url": "/uploads/a1b2c3d4.png", "bytes": 184312 }
+```
+
+Used as the source for `ProductDemo.screenshot` when the user wants to demo their own UI instead of the built-in `MockDashboard`.
+
+## What's *not* exposed
+
+- **MP4 render** — Remotion's `render` CLI works locally but isn't wired to an endpoint. To add: `/api/render` that calls `bundle` + `renderMedia` from `@remotion/renderer`, writes to disk, returns the URL. Eventually move to Remotion Lambda for scale.
+- **Auth** — there's none. Every request is anonymous. Production needs at least a session check.
+- **Rate limiting** — the LLM providers throttle us, but there's no app-level rate limit. Add a token bucket if you expose this publicly.
+- **Webhooks / async jobs** — every generation runs in-band inside the SSE stream. Long jobs (Remotion Lambda renders) would need a separate job-id endpoint and polling.

@@ -25,6 +25,20 @@ export const metadata: Metadata = {
   description: "Generate SaaS launch ads from a prompt.",
 };
 
+// Inline no-flash script. Runs BEFORE React hydrates so the page's first
+// paint uses the right theme (otherwise we'd see a beige flash on dark-mode
+// users, or vice versa). Reads localStorage + prefers-color-scheme.
+const NO_FLASH_THEME = `(function() {
+  try {
+    var stored = localStorage.getItem('motion-saas:theme');
+    var setting = (stored === 'light' || stored === 'dark' || stored === 'system') ? stored : 'system';
+    var theme = setting === 'system'
+      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : setting;
+    document.documentElement.setAttribute('data-theme', theme);
+  } catch (e) {}
+})();`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -34,7 +48,14 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${sans.variable} ${mono.variable} ${serif.variable} h-full antialiased`}
+      // The inline no-flash script below sets `data-theme` on the client
+      // before React hydrates. That's an intentional client-only attribute
+      // change; this suppression tells React not to flag it as a mismatch.
+      suppressHydrationWarning
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: NO_FLASH_THEME }} />
+      </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

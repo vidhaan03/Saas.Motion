@@ -16,7 +16,21 @@ import {
   saveBoard,
   type SavedBoard,
 } from "../lib/storage";
+import { humanSourceName, type SourceTag } from "../lib/sourceLabel";
+import { createSupabaseBrowserClient } from "../lib/supabase/client";
 import type { Scene, Storyboard } from "../remotion/schema";
+import type { TypefaceKey } from "../remotion/fonts";
+import type { VibeKey } from "../remotion/vibes";
+import { AtmosphericBackdrop } from "./components/AtmosphericBackdrop";
+import { MotionLogotype } from "./components/MotionLogotype";
+import { TypefacePicker } from "./components/TypefacePicker";
+import { VibePicker } from "./components/VibePicker";
+import { PillNav } from "./components/PillNav";
+import { ThemeToggle } from "./components/ThemeToggle";
+import { UserMenu } from "./components/UserMenu";
+import { DirectorCard } from "./components/agents/DirectorCard";
+import { SpecialistGrid } from "./components/agents/SpecialistGrid";
+import { useRouter } from "next/navigation";
 
 const PlayerSkeleton = () => (
   <div
@@ -48,64 +62,9 @@ const GraphEditor = dynamic(
 
 type StreamState =
   | { phase: "idle" }
-  | {
-      phase: "streaming";
-      total: number;
-      received: number;
-      // Older type was "mock" | "claude" | "gemini" — kept for reference.
-      source: | "mock"
-      | "claude"
-      | "gemini"
-      | "nim-gemma"
-      | "nim-llama"
-      | "agentic-nim"
-      | "agentic-gemini"
-      | "agentic-mixed";
-    }
-  | {
-      phase: "done";
-      source: | "mock"
-      | "claude"
-      | "gemini"
-      | "nim-gemma"
-      | "nim-llama"
-      | "agentic-nim"
-      | "agentic-gemini"
-      | "agentic-mixed";
-    }
+  | { phase: "streaming"; total: number; received: number; source: SourceTag }
+  | { phase: "done"; source: SourceTag }
   | { phase: "error"; message: string };
-
-const humanSourceName = (
-  s:
-    | "mock"
-    | "claude"
-    | "gemini"
-    | "nim-gemma"
-    | "nim-llama"
-    | "agentic-nim"
-    | "agentic-gemini"
-    | "agentic-mixed",
-): string => {
-  switch (s) {
-    case "agentic-gemini":
-      return "Agentic MoE · Gemini 2.5 Flash Lite";
-    case "agentic-nim":
-      return "Agentic MoE · NIM";
-    case "agentic-mixed":
-      return "Agentic MoE · Gemini + NIM";
-    case "nim-gemma":
-      return "NIM";
-    case "nim-llama":
-      return "NIM · Llama";
-    case "gemini":
-      return "Gemini 2.5 Flash Lite";
-    case "claude":
-      return "Claude";
-    case "mock":
-    default:
-      return "mock generator";
-  }
-};
 
 const sceneLabel = (s: Scene) => {
   switch (s.type) {
@@ -163,6 +122,10 @@ export default function Home() {
   const [brandName, setBrandName] = useState("");
   const [color, setColor] = useState("#0EA5E9");
   const [accent, setAccent] = useState("#22D3EE");
+  const [typeface, setTypeface] = useState<TypefaceKey | undefined>(
+    undefined,
+  );
+  const [vibe, setVibe] = useState<VibeKey | undefined>(undefined);
   const [stream, setStream] = useState<StreamState>({ phase: "idle" });
   const [playerKey, setPlayerKey] = useState(0);
   const [trace, setTrace] = useState<{
@@ -190,9 +153,56 @@ export default function Home() {
   );
   const [aspect, setAspect] = useState<Aspect>("vertical");
   const abortRef = useRef<AbortController | null>(null);
+  const router = useRouter();
 
   useEffect(() => {
     setSavedBoards(listBoards());
+  }, []);
+
+  // Sync brand-kit form state into the active storyboard so the Player
+  // re-renders when the user edits brand name / color / accent / typeface.
+  // Without this, brand inputs only land in the storyboard on load /
+  // generate; live edits in the sidebar would have no visual effect.
+  useEffect(() => {
+    setStoryboard((prev) => {
+      const same =
+        prev.brand.name === brandName &&
+        prev.brand.color === color &&
+        prev.brand.accent === accent &&
+        prev.brand.typeface === typeface &&
+        prev.brand.vibe === vibe;
+      if (same) return prev;
+      return {
+        ...prev,
+        brand: {
+          ...prev.brand,
+          name: brandName,
+          color,
+          accent,
+          typeface,
+          vibe,
+        },
+      };
+    });
+    // NOTE: previously bumped playerKey here, but that remounted the
+    // Player on every keystroke in the brand picker — caused the video
+    // to pause/restart constantly. Remotion's Player picks up storyboard
+    // prop changes without a remount; key bumping is only needed when
+    // the underlying composition shape changes (scene count, fps, etc).
+  }, [brandName, color, accent, typeface, vibe]);
+
+  // Restore prompt from `?prompt=` URL param — used when user returns from
+  // the /login page after gating Generate.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const restored = url.searchParams.get("prompt");
+    if (restored) {
+      setPrompt(restored);
+      // Clean the URL so refreshes don't keep restoring
+      url.searchParams.delete("prompt");
+      window.history.replaceState({}, "", url.toString());
+    }
   }, []);
 
   // ─── Dev preview: `?preview=loading` shows the generating screen with a
@@ -211,6 +221,8 @@ export default function Home() {
     setBrandName(sample.brand.name);
     setColor(sample.brand.color);
     setAccent(sample.brand.accent);
+    setTypeface(sample.brand.typeface);
+    setVibe(sample.brand.vibe);
     setStoryboard({ brand: sample.brand, scenes: [] });
     setStream({
       phase: "streaming",
@@ -341,6 +353,8 @@ export default function Home() {
     setBrandName(board.storyboard.brand.name);
     setColor(board.storyboard.brand.color);
     setAccent(board.storyboard.brand.accent);
+    setTypeface(board.storyboard.brand.typeface);
+    setVibe(board.storyboard.brand.vibe);
     setActiveBoardId(board.id);
     setPlayerKey((k) => k + 1);
     setStream({ phase: "idle" });
@@ -364,6 +378,24 @@ export default function Home() {
   };
 
   const generate = async () => {
+    // Auth gate: generation costs Gemini/NIM quota, so it requires a signed-in
+    // user. Anonymous users can still browse, edit, save to localStorage.
+    //
+    // Dev bypass: set NEXT_PUBLIC_DEV_BYPASS_AUTH=true in .env.local to skip
+    // this check during local dev (e.g. when hitting Supabase's email rate
+    // limit). Never set this on Vercel production env vars.
+    const bypass = process.env.NEXT_PUBLIC_DEV_BYPASS_AUTH === "true";
+    if (process.env.NEXT_PUBLIC_SUPABASE_URL && !bypass) {
+      const supabase = createSupabaseBrowserClient();
+      const { data } = await supabase.auth.getUser();
+      if (!data.user) {
+        const next =
+          "/?prompt=" + encodeURIComponent(prompt.trim().slice(0, 500));
+        router.push(`/login?next=${encodeURIComponent(next)}`);
+        return;
+      }
+    }
+
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -373,7 +405,7 @@ export default function Home() {
     setViewMode("generating");
     setTrace({ director: null, specialists: {} });
     setStoryboard({
-      brand: { name: brandName, color, accent },
+      brand: { name: brandName, color, accent, typeface, vibe },
       scenes: [],
     });
 
@@ -383,7 +415,7 @@ export default function Home() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           prompt,
-          brand: { name: brandName, color, accent },
+          brand: { name: brandName, color, accent, typeface, vibe },
         }),
         signal: controller.signal,
       });
@@ -398,13 +430,8 @@ export default function Home() {
 
       const accumulated: Scene[] = [];
       let total = 0;
-      let source:
-        | "mock"
-        | "claude"
-        | "gemini"
-        | "nim-gemma"
-        | "nim-llama" = "mock";
-      const liveBrand = { name: brandName, color, accent };
+      let source: SourceTag = "mock";
+      const liveBrand = { name: brandName, color, accent, typeface, vibe };
 
       while (true) {
         const { value, done } = await reader.read();
@@ -475,11 +502,81 @@ export default function Home() {
     }
   };
 
+  // FLUX-based parallel generator. Single non-streaming endpoint that
+  // plans 5-8 shots + fires image gen in parallel. Returns the full
+  // storyboard at once when ready (~5-15s wall time). Mirrors
+  // generate()'s auth gate + view transitions so the user sees the
+  // generating screen during the wait.
+  const generateVisual = async () => {
+    const bypass = process.env.NEXT_PUBLIC_DEV_BYPASS_AUTH === "true";
+    if (process.env.NEXT_PUBLIC_SUPABASE_URL && !bypass) {
+      const supabase = createSupabaseBrowserClient();
+      const { data } = await supabase.auth.getUser();
+      if (!data.user) {
+        const next =
+          "/?prompt=" + encodeURIComponent(prompt.trim().slice(0, 500));
+        router.push(`/login?next=${encodeURIComponent(next)}`);
+        return;
+      }
+    }
+
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setStream({
+      phase: "streaming",
+      total: 0,
+      received: 0,
+      source: "agentic-flux" as SourceTag,
+    });
+    setActiveBoardId(null);
+    setViewMode("generating");
+    setTrace({ director: null, specialists: {} });
+    const liveBrand = { name: brandName, color, accent, typeface, vibe };
+    setStoryboard({ brand: liveBrand, scenes: [] });
+
+    try {
+      const res = await fetch("/api/generate-visual", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt, brand: liveBrand }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: "Server error" }));
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as {
+        storyboard: Storyboard;
+        designNotes?: string;
+        imagesGenerated: number;
+        imagesFailed: number;
+        source: SourceTag;
+      };
+      setStoryboard(data.storyboard);
+      setStream({ phase: "done", source: data.source });
+      setPlayerKey((k) => k + 1);
+      window.setTimeout(() => setViewMode("editor"), 600);
+    } catch (e) {
+      if (controller.signal.aborted) {
+        setViewMode("welcome");
+        return;
+      }
+      const message = e instanceof Error ? e.message : String(e);
+      console.error("[generateVisual] failed:", message);
+      setStream({ phase: "error", message });
+      setViewMode("welcome");
+    }
+  };
+
   const pickPreset = (sb: Storyboard) => {
     setStoryboard(sb);
     setBrandName(sb.brand.name);
     setColor(sb.brand.color);
     setAccent(sb.brand.accent);
+    setTypeface(sb.brand.typeface);
+    setVibe(sb.brand.vibe);
     setActiveBoardId(null);
     setPlayerKey((k) => k + 1);
     setStream({ phase: "idle" });
@@ -502,22 +599,36 @@ export default function Home() {
         className="relative min-h-screen overflow-x-hidden"
         style={{ color: "var(--ink)" }}
       >
-        {/* ─── Atmospheric backdrop ─── */}
+        <AtmosphericBackdrop />
+
+        {/* ─── Mode toggle (Video / Docs) — anchored top-left ─── */}
         <div
-          className="pointer-events-none absolute inset-0 -z-10"
+          className="fixed left-6 top-6 z-30 flex items-center gap-0.5 rounded-full border p-0.5 backdrop-blur-2xl"
           style={{
             background:
-              "radial-gradient(ellipse at 15% 0%, #FCDFCB 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, #E8A689 0%, transparent 55%), linear-gradient(180deg, var(--bg) 0%, var(--bg-warm) 100%)",
+              "color-mix(in srgb, var(--bg-elev) 85%, transparent)",
+            borderColor:
+              "color-mix(in srgb, var(--ink) 12%, transparent)",
+            boxShadow: "var(--shadow)",
           }}
-        />
-        {/* Subtle grain overlay */}
-        <div
-          className="pointer-events-none absolute inset-0 -z-10 opacity-[0.04] mix-blend-multiply"
-          style={{
-            backgroundImage:
-              "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>\")",
-          }}
-        />
+        >
+          <span
+            className="rounded-full px-4 py-1.5 text-sm font-medium"
+            style={{
+              background: "var(--ink)",
+              color: "var(--bg)",
+            }}
+          >
+            Video
+          </span>
+          <a
+            href="/docs-saas"
+            className="rounded-full px-4 py-1.5 text-sm transition hover:bg-black/5"
+            style={{ color: "var(--ink-muted)" }}
+          >
+            Docs.Saas
+          </a>
+        </div>
 
         {/* ─── Glassy pill nav ─── */}
         <header className="relative flex justify-center px-6 pt-6">
@@ -531,20 +642,8 @@ export default function Home() {
               boxShadow: "var(--shadow)",
             }}
           >
-            <span
-              className="px-4 py-1.5 text-base"
-              style={{ color: "var(--ink)" }}
-            >
-              <span
-                className="italic"
-                style={{
-                  fontFamily: "var(--font-serif), serif",
-                  fontWeight: 500,
-                }}
-              >
-                motion
-              </span>
-              <span style={{ fontWeight: 600 }}>.saas</span>
+            <span className="px-4 py-1.5">
+              <MotionLogotype />
             </span>
             <button
               onClick={() => {
@@ -593,10 +692,25 @@ export default function Home() {
             >
               GitHub
             </a>
+            <UserMenu nextPath="/" />
+            <button
+              onClick={generateVisual}
+              disabled={streaming || prompt.trim().length === 0}
+              title="Generate with FLUX-driven cinematic visuals (slower, image-heavy)"
+              className="ml-1 rounded-full border px-4 py-2 text-sm font-medium transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30"
+              style={{
+                borderColor: "color-mix(in srgb, var(--ink) 18%, transparent)",
+                background:
+                  "color-mix(in srgb, var(--bg-elev) 75%, transparent)",
+                color: "var(--ink)",
+              }}
+            >
+              ✦ Visual
+            </button>
             <button
               onClick={generate}
               disabled={streaming || prompt.trim().length === 0}
-              className="ml-1 rounded-full px-5 py-2 text-sm font-medium transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30"
+              className="rounded-full px-5 py-2 text-sm font-medium transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30"
               style={{
                 background: "var(--ink)",
                 color: "var(--bg)",
@@ -775,54 +889,64 @@ export default function Home() {
           id="presets"
           className="relative mx-auto w-full max-w-[1100px] px-8 pb-16 pt-12"
         >
+          {/* Editorial section header — matches the hero's serif/sans hybrid */}
           <div
-            className="mb-4 flex items-baseline justify-between border-b pb-3 font-mono text-[11px] uppercase tracking-widest"
-            style={{
-              borderColor: "var(--rule)",
-              color: "var(--ink-faint)",
-            }}
+            className="mb-6 flex items-end justify-between border-b pb-4"
+            style={{ borderColor: "var(--rule)" }}
           >
-            <span>Presets</span>
-            <span>
+            <div className="flex items-baseline gap-3">
+              <span
+                className="font-mono text-[11px] uppercase tracking-widest"
+                style={{ color: "var(--ink-faint)" }}
+              >
+                01
+              </span>
+              <h2
+                className="tracking-[-0.02em]"
+                style={{
+                  fontFamily: "var(--font-serif), serif",
+                  fontStyle: "italic",
+                  fontWeight: 500,
+                  fontSize: "clamp(28px, 3.5vw, 44px)",
+                  lineHeight: 1,
+                  color: "var(--ink)",
+                }}
+              >
+                Presets
+              </h2>
+            </div>
+            <span
+              className="font-mono text-[11px] uppercase tracking-widest"
+              style={{ color: "var(--ink-faint)" }}
+            >
               {filteredPresets.length} of {presets.length} brands
             </span>
           </div>
-          <div
-            className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-2 font-mono text-[11px] uppercase tracking-widest"
-          >
-            <button
-              onClick={() => setPresetFilter("all")}
-              className="border-b transition"
-              style={{
-                borderColor:
-                  presetFilter === "all" ? "var(--ink)" : "transparent",
-                color:
-                  presetFilter === "all"
-                    ? "var(--ink)"
-                    : "var(--ink-faint)",
-              }}
-            >
-              all
-            </button>
-            {PRESET_CATEGORIES.map((c) => (
-              <button
-                key={c}
-                onClick={() => setPresetFilter(c)}
-                className="border-b transition"
-                style={{
-                  borderColor:
-                    presetFilter === c ? "var(--ink)" : "transparent",
-                  color:
-                    presetFilter === c
-                      ? "var(--ink)"
-                      : "var(--ink-faint)",
-                }}
-              >
-                {c}
-              </button>
-            ))}
+
+          {/* Category filter — minimal text chips, active gets ink underline */}
+          <div className="mb-6 flex flex-wrap items-center gap-x-5 gap-y-2 font-mono text-[11px] uppercase tracking-widest">
+            {(["all", ...PRESET_CATEGORIES] as const).map((c) => {
+              const isActive = presetFilter === c;
+              return (
+                <button
+                  key={c}
+                  onClick={() =>
+                    setPresetFilter(c as typeof presetFilter)
+                  }
+                  className="border-b pb-0.5 transition"
+                  style={{
+                    borderColor: isActive ? "var(--ink)" : "transparent",
+                    color: isActive ? "var(--ink)" : "var(--ink-faint)",
+                  }}
+                >
+                  {c}
+                </button>
+              );
+            })}
           </div>
-          <div className="grid grid-cols-2 gap-x-8 sm:grid-cols-3 lg:grid-cols-4">
+
+          {/* Preset rows — minimal: tiny dot, name + category, metadata */}
+          <div className="grid grid-cols-1 gap-x-8 sm:grid-cols-2 lg:grid-cols-3">
             {filteredPresets.map((p) => {
               const sb = p.storyboard;
               const seconds = Math.round(
@@ -832,21 +956,40 @@ export default function Home() {
                 <button
                   key={sb.brand.name}
                   onClick={() => pickPreset(sb)}
-                  className="group grid h-11 grid-cols-[12px_1fr_auto] items-center gap-3 border-b text-left transition"
+                  className="group flex items-baseline gap-3 border-b py-3 text-left transition"
                   style={{ borderColor: "var(--rule)" }}
                 >
+                  {/* Tiny accent dot */}
                   <span
-                    className="h-2 w-2 rounded-full transition group-hover:scale-150"
+                    className="block h-2 w-2 shrink-0 translate-y-[3px] rounded-full transition group-hover:scale-[1.6]"
                     style={{ background: sb.brand.accent }}
                   />
+                  {/* Brand name + italic category */}
+                  <div className="flex min-w-0 flex-1 items-baseline gap-2">
+                    <span
+                      className="truncate text-[15px] font-medium"
+                      style={{
+                        color: "var(--ink)",
+                        letterSpacing: "-0.01em",
+                      }}
+                    >
+                      {sb.brand.name}
+                    </span>
+                    <span
+                      className="italic"
+                      style={{
+                        fontFamily: "var(--font-serif), serif",
+                        fontWeight: 400,
+                        fontSize: 12,
+                        color: "var(--ink-faint)",
+                      }}
+                    >
+                      {p.category}
+                    </span>
+                  </div>
+                  {/* Metadata — single inline string */}
                   <span
-                    className="min-w-0 truncate text-sm"
-                    style={{ color: "var(--ink)" }}
-                  >
-                    {sb.brand.name.toLowerCase()}
-                  </span>
-                  <span
-                    className="w-14 text-right font-mono text-[10px] tabular-nums"
+                    className="shrink-0 font-mono text-[10px] tabular-nums"
                     style={{ color: "var(--ink-faint)" }}
                   >
                     {sb.scenes.length}·{seconds}s
@@ -861,32 +1004,58 @@ export default function Home() {
           id="examples"
           className="relative mx-auto w-full max-w-[1100px] px-8 pb-16"
         >
+          {/* Editorial section header */}
           <div
-            className="mb-4 flex items-baseline justify-between border-b pb-3 font-mono text-[11px] uppercase tracking-widest"
-            style={{
-              borderColor: "var(--rule)",
-              color: "var(--ink-faint)",
-            }}
+            className="mb-6 flex items-end justify-between border-b pb-4"
+            style={{ borderColor: "var(--rule)" }}
           >
-            <span>Example prompts</span>
-            <span>click to load</span>
+            <div className="flex items-baseline gap-3">
+              <span
+                className="font-mono text-[11px] uppercase tracking-widest"
+                style={{ color: "var(--ink-faint)" }}
+              >
+                02
+              </span>
+              <h2
+                className="tracking-[-0.02em]"
+                style={{
+                  fontFamily: "var(--font-serif), serif",
+                  fontStyle: "italic",
+                  fontWeight: 500,
+                  fontSize: "clamp(28px, 3.5vw, 44px)",
+                  lineHeight: 1,
+                  color: "var(--ink)",
+                }}
+              >
+                Example prompts
+              </h2>
+            </div>
+            <span
+              className="font-mono text-[11px] uppercase tracking-widest"
+              style={{ color: "var(--ink-faint)" }}
+            >
+              click to load
+            </span>
           </div>
-          <div className="grid gap-y-2 sm:grid-cols-2 sm:gap-x-8">
+
+          {/* Prompt rows — minimal: tabular number + text + bottom rule */}
+          <div className="grid gap-x-12 sm:grid-cols-2">
             {SUGGESTIONS.map((s, i) => (
               <button
                 key={i}
                 onClick={() => setPrompt(s)}
-                className="group flex items-baseline gap-3 text-left text-sm transition"
-                style={{ color: "var(--ink-muted)" }}
+                className="group flex items-baseline gap-4 border-b py-3.5 text-left transition"
+                style={{ borderColor: "var(--rule)" }}
               >
                 <span
-                  className="font-mono text-[10px]"
+                  className="shrink-0 font-mono text-[10px] tabular-nums"
                   style={{ color: "var(--ink-faint)" }}
                 >
                   {String(i + 1).padStart(2, "0")}
                 </span>
                 <span
-                  className="border-b border-transparent leading-relaxed group-hover:border-current"
+                  className="text-sm leading-relaxed transition group-hover:translate-x-0.5"
+                  style={{ color: "var(--ink)" }}
                 >
                   {s}
                 </span>
@@ -971,7 +1140,7 @@ export default function Home() {
         {hasScenes ? (
           <button
             onClick={() => setViewMode("editor")}
-            className="fixed bottom-6 right-6 rounded-full border px-4 py-2 text-xs backdrop-blur-xl transition hover:scale-105"
+            className="fixed bottom-20 right-6 rounded-full border px-4 py-2 text-xs backdrop-blur-xl transition hover:scale-105"
             style={{
               background:
                 "color-mix(in srgb, var(--bg-elev) 80%, transparent)",
@@ -984,6 +1153,31 @@ export default function Home() {
             ↻ Current project
           </button>
         ) : null}
+
+        {/* Floating theme toggle — visible across the whole welcome view */}
+        <div
+          className="fixed bottom-6 right-6 flex items-center gap-2 rounded-full border px-3 py-1 backdrop-blur-2xl"
+          style={{
+            background:
+              "color-mix(in srgb, var(--bg-elev) 85%, transparent)",
+            borderColor:
+              "color-mix(in srgb, var(--ink) 12%, transparent)",
+            boxShadow: "var(--shadow)",
+          }}
+        >
+          <a
+            href="/docs"
+            className="font-mono text-[10px] uppercase tracking-widest transition hover:opacity-70"
+            style={{ color: "var(--ink-faint)" }}
+          >
+            docs
+          </a>
+          <span
+            className="h-3 w-px"
+            style={{ background: "color-mix(in srgb, var(--ink) 12%, transparent)" }}
+          />
+          <ThemeToggle compact />
+        </div>
       </main>
     );
 
@@ -1311,7 +1505,15 @@ export default function Home() {
           <footer className="mt-auto border-t border-[#D4CCBC] px-8 py-4">
             <div className="mx-auto flex w-full max-w-[920px] items-center justify-between font-mono text-[10px] uppercase tracking-widest text-[#A39C8F]">
               <span>v0.1 · prototype</span>
-              <span>9:16 vertical · 1080×1920</span>
+              <div className="flex items-center gap-4">
+                <a
+                  href="/docs"
+                  className="transition hover:text-[#2D2A26]"
+                >
+                  docs
+                </a>
+                <span>9:16 vertical · 1080×1920</span>
+              </div>
             </div>
           </footer>
         </div>
@@ -1336,21 +1538,7 @@ export default function Home() {
         className="relative flex min-h-screen flex-col overflow-x-hidden"
         style={{ color: "var(--ink)" }}
       >
-        {/* Atmospheric backdrop (same as welcome / editor) */}
-        <div
-          className="pointer-events-none absolute inset-0 -z-10"
-          style={{
-            background:
-              "radial-gradient(ellipse at 15% 0%, #FCDFCB 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, #E8A689 0%, transparent 55%), linear-gradient(180deg, var(--bg) 0%, var(--bg-warm) 100%)",
-          }}
-        />
-        <div
-          className="pointer-events-none absolute inset-0 -z-10 opacity-[0.04] mix-blend-multiply"
-          style={{
-            backgroundImage:
-              "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>\")",
-          }}
-        />
+        <AtmosphericBackdrop />
 
         {/* Glassy pill nav at top (matches welcome / editor) */}
         <header className="relative flex justify-center px-6 pt-6">
@@ -1364,20 +1552,8 @@ export default function Home() {
               boxShadow: "var(--shadow)",
             }}
           >
-            <span
-              className="px-2 py-1 text-base"
-              style={{ color: "var(--ink)" }}
-            >
-              <span
-                className="italic"
-                style={{
-                  fontFamily: "var(--font-serif), serif",
-                  fontWeight: 500,
-                }}
-              >
-                motion
-              </span>
-              <span style={{ fontWeight: 600 }}>.saas</span>
+            <span className="px-2 py-1">
+              <MotionLogotype />
             </span>
             <span
               className="font-mono text-[10px] uppercase tracking-widest"
@@ -1474,311 +1650,13 @@ export default function Home() {
               </div>
             </div>
 
-              <div className="mt-12">
-                {/* ─── Director agent card ─── */}
-                <div
-                  className="relative rounded-2xl border p-4 backdrop-blur transition-all"
-                  style={{
-                    animation: "sceneArrive 400ms ease-out",
-                    background:
-                      "color-mix(in srgb, var(--bg-elev) 80%, transparent)",
-                    borderColor: trace.director?.status === "done"
-                      ? "color-mix(in srgb, var(--ink) 18%, transparent)"
-                      : "color-mix(in srgb, var(--ink) 10%, transparent)",
-                    boxShadow: "var(--shadow)",
-                  }}
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-7 w-7 items-center justify-center rounded-full"
-                      style={{
-                        background:
-                          trace.director?.status === "done"
-                            ? "var(--ink)"
-                            : "color-mix(in srgb, var(--ink) 8%, transparent)",
-                        color:
-                          trace.director?.status === "done"
-                            ? "var(--bg)"
-                            : "var(--ink-muted)",
-                      }}
-                    >
-                      <span className="text-xs">✦</span>
-                    </span>
-                    <div className="flex-1">
-                      <div
-                        className="font-mono text-[10px] uppercase tracking-widest"
-                        style={{ color: "var(--ink-faint)" }}
-                      >
-                        director agent
-                      </div>
-                      <div
-                        className="mt-0.5 text-sm font-medium"
-                        style={{ color: "var(--ink)" }}
-                      >
-                        {trace.director?.message ?? "Spawning…"}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div
-                        className={`flex items-center justify-end gap-1.5 font-mono text-[10px] uppercase tracking-widest ${trace.director?.status === "thinking" ? "animate-pulse" : ""}`}
-                        style={{
-                          color:
-                            trace.director?.status === "done"
-                              ? "var(--ink-muted)"
-                              : trace.director?.status === "failed"
-                                ? "#B91C1C"
-                                : "var(--accent)",
-                        }}
-                      >
-                        <span
-                          className="h-1.5 w-1.5 rounded-full"
-                          style={{
-                            background:
-                              trace.director?.status === "done"
-                                ? "var(--ink-muted)"
-                                : trace.director?.status === "failed"
-                                  ? "#B91C1C"
-                                  : "var(--accent)",
-                          }}
-                        />
-                        {trace.director?.status === "done"
-                          ? "Ready"
-                          : trace.director?.status === "failed"
-                            ? "Failed"
-                            : "Planning"}
-                      </div>
-                      <div
-                        className="mt-0.5 font-mono text-[10px]"
-                        style={{ color: "var(--ink-faint)" }}
-                      >
-                        {trace.director?.ms !== undefined
-                          ? `${(trace.director.ms / 1000).toFixed(1)}s`
-                          : "—"}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* ─── Spine: vertical line from director down to the rail ─── */}
-                {total > 0 ? (
-                  <div className="relative mx-auto h-8 w-px">
-                    <div
-                      className="absolute inset-0"
-                      style={{ background: "var(--rule)" }}
-                    />
-                    <div
-                      className="absolute inset-x-0 top-1/2 h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full"
-                      style={{ background: "var(--ink-faint)" }}
-                    />
-                  </div>
-                ) : null}
-
-                {/* ─── Fan-out rail + label ─── */}
-                {total > 0 ? (
-                  <div className="relative flex items-center gap-3 px-1">
-                    <span
-                      className="h-px flex-1"
-                      style={{ background: "var(--rule)" }}
-                    />
-                    <span
-                      className="italic"
-                      style={{
-                        color: "var(--ink-muted)",
-                        fontFamily: "var(--font-serif), serif",
-                        fontWeight: 500,
-                        fontSize: 14,
-                        letterSpacing: "-0.01em",
-                      }}
-                    >
-                      {total} specialist agents in parallel
-                    </span>
-                    <span
-                      className="h-px flex-1"
-                      style={{ background: "var(--rule)" }}
-                    />
-                  </div>
-                ) : null}
-
-                {/* ─── Specialist agent grid (each card hangs from the rail) ─── */}
-                {total > 0 ? (
-                <div
-                  className="mt-0 grid gap-3"
-                  style={{
-                    gridTemplateColumns:
-                      "repeat(auto-fit, minmax(180px, 1fr))",
-                  }}
-                >
-                  {Array.from({ length: total }).map((_, idx) => {
-                    const sp = trace.specialists[idx];
-                    const scene = storyboard.scenes[idx];
-                    const status: "queued" | "thinking" | "done" | "failed" =
-                      scene
-                        ? "done"
-                        : sp?.status === "thinking"
-                          ? "thinking"
-                          : sp?.status === "failed"
-                            ? "failed"
-                            : "queued";
-                    const isDone = status === "done";
-                    const isThinking = status === "thinking";
-                    const isQueued = status === "queued";
-                    const isFailed = status === "failed";
-
-                    const sceneType =
-                      scene?.type ?? sp?.sceneType ?? null;
-                    const shortType = sceneType
-                      ? sceneType === "kineticTitle"
-                        ? "title"
-                        : sceneType === "statReveal"
-                          ? "stat"
-                          : sceneType === "featureGrid"
-                            ? "grid"
-                            : sceneType === "productDemo"
-                              ? "demo"
-                              : sceneType === "testimonialQuote"
-                                ? "quote"
-                                : sceneType === "logoWall"
-                                  ? "logos"
-                                  : sceneType === "ctaCard"
-                                    ? "cta"
-                                    : sceneType === "multiScript"
-                                      ? "script"
-                                      : sceneType === "productCarousel"
-                                        ? "carousel"
-                                        : "ui"
-                      : "—";
-
-                    const body = scene
-                      ? scene.type === "kineticTitle"
-                        ? scene.lines.join(" ")
-                        : scene.type === "statReveal"
-                          ? `${scene.value}${scene.suffix ?? ""} — ${scene.label}`
-                          : scene.type === "featureGrid"
-                            ? scene.heading
-                            : scene.type === "productDemo"
-                              ? scene.caption ??
-                                `${scene.actions.length} cursor actions`
-                              : scene.type === "testimonialQuote"
-                                ? `"${scene.quote}"`
-                                : scene.type === "logoWall"
-                                  ? `${scene.heading} · ${scene.logos.length}`
-                                  : scene.type === "ctaCard"
-                                    ? `${scene.headline} → ${scene.buttonLabel}`
-                                    : scene.type === "multiScript"
-                                      ? scene.glyphs
-                                          .map((g) => g.char)
-                                          .join(" → ")
-                                      : scene.type === "productCarousel"
-                                        ? `${scene.products.length} products`
-                                        : `${scene.frame ?? "browser"} showcase`
-                      : isThinking
-                        ? "Drafting…"
-                        : isFailed
-                          ? "Failed"
-                          : "Queued";
-
-                    return (
-                      <div
-                        key={idx}
-                        className="relative flex flex-col rounded-xl border p-3 transition-all"
-                        style={{
-                          marginTop: 14, // room for the connector notch above
-                          animation: "sceneArrive 500ms ease-out",
-                          background: isDone
-                            ? "var(--bg-elev)"
-                            : "color-mix(in srgb, var(--bg-elev) 40%, transparent)",
-                          borderColor: isDone
-                            ? "color-mix(in srgb, var(--ink) 16%, transparent)"
-                            : "color-mix(in srgb, var(--ink) 8%, transparent)",
-                          boxShadow: isDone ? "var(--shadow)" : "none",
-                          opacity: isQueued ? 0.55 : 1,
-                        }}
-                      >
-                        {/* Connector notch dropping from the rail */}
-                        <div
-                          className="pointer-events-none absolute left-1/2 -translate-x-1/2"
-                          style={{
-                            top: -14,
-                            width: 1,
-                            height: 14,
-                            background: "var(--rule)",
-                          }}
-                        />
-                        <div
-                          className="pointer-events-none absolute left-1/2 -translate-x-1/2"
-                          style={{
-                            top: -14,
-                            width: 5,
-                            height: 5,
-                            borderRadius: "50%",
-                            background: isDone
-                              ? "var(--ink)"
-                              : isThinking
-                                ? "var(--accent)"
-                                : isFailed
-                                  ? "#B91C1C"
-                                  : "var(--ink-faint)",
-                            transform: "translate(-50%, -2.5px)",
-                          }}
-                        />
-                        <div className="flex items-center justify-between">
-                          <span
-                            className="font-mono text-[10px]"
-                            style={{ color: "var(--ink-faint)" }}
-                          >
-                            {String(idx + 1).padStart(2, "0")}
-                          </span>
-                          <span
-                            className={`h-1.5 w-1.5 rounded-full ${isThinking ? "animate-pulse" : ""}`}
-                            style={{
-                              background: isDone
-                                ? "var(--ink)"
-                                : isFailed
-                                  ? "#B91C1C"
-                                  : isThinking
-                                    ? "var(--accent)"
-                                    : "var(--ink-faint)",
-                            }}
-                          />
-                        </div>
-                        <div
-                          className="mt-2 font-mono text-[10px] uppercase tracking-widest"
-                          style={{
-                            color: isDone
-                              ? "var(--ink-muted)"
-                              : "var(--ink-faint)",
-                          }}
-                        >
-                          {shortType}
-                        </div>
-                        <div
-                          className="mt-1.5 line-clamp-2 text-[12px] leading-snug"
-                          style={{
-                            color: isDone
-                              ? "var(--ink)"
-                              : "var(--ink-faint)",
-                          }}
-                        >
-                          {body}
-                        </div>
-                        <div className="mt-auto pt-3">
-                          <div
-                            className="font-mono text-[10px]"
-                            style={{ color: "var(--ink-faint)" }}
-                          >
-                            {sp?.ms !== undefined
-                              ? `${(sp.ms / 1000).toFixed(1)}s`
-                              : isThinking
-                                ? "…"
-                                : isFailed
-                                  ? "—"
-                                  : "—"}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                ) : null}
+              <div className="mt-12 space-y-6">
+                <DirectorCard trace={trace.director} />
+                <SpecialistGrid
+                  total={total}
+                  specialists={trace.specialists}
+                  scenes={storyboard.scenes}
+                />
               </div>
             </div>
           </div>
@@ -1797,7 +1675,16 @@ export default function Home() {
               style={{ color: "var(--ink-faint)" }}
             >
               <span>streaming · server-sent events</span>
-              <span>{sourceLabel}</span>
+              <div className="flex items-center gap-4">
+                <a
+                  href="/docs"
+                  className="transition hover:opacity-80"
+                  style={{ color: "var(--ink-faint)" }}
+                >
+                  docs
+                </a>
+                <span>{sourceLabel}</span>
+              </div>
             </div>
           </footer>
         <style jsx global>{`
@@ -1821,21 +1708,7 @@ export default function Home() {
       className="relative min-h-screen overflow-x-hidden"
       style={{ color: "var(--ink)" }}
     >
-      {/* ─── Atmospheric backdrop (same as welcome) ─── */}
-      <div
-        className="pointer-events-none absolute inset-0 -z-10"
-        style={{
-          background:
-            "radial-gradient(ellipse at 15% 0%, #FCDFCB 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, #E8A689 0%, transparent 55%), linear-gradient(180deg, var(--bg) 0%, var(--bg-warm) 100%)",
-        }}
-      />
-      <div
-        className="pointer-events-none absolute inset-0 -z-10 opacity-[0.04] mix-blend-multiply"
-        style={{
-          backgroundImage:
-            "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>\")",
-        }}
-      />
+      <AtmosphericBackdrop />
 
       {/* ─── Glassy top bar ─── */}
       <header className="sticky top-0 z-20 flex justify-center px-6 pt-6">
@@ -1857,20 +1730,8 @@ export default function Home() {
           >
             ← Home
           </button>
-          <span
-            className="px-2 py-1.5 text-base"
-            style={{ color: "var(--ink)" }}
-          >
-            <span
-              className="italic"
-              style={{
-                fontFamily: "var(--font-serif), serif",
-                fontWeight: 500,
-              }}
-            >
-              motion
-            </span>
-            <span style={{ fontWeight: 600 }}>.saas</span>
+          <span className="px-2 py-1.5">
+            <MotionLogotype />
           </span>
           <span
             className="ml-1 hidden truncate font-mono text-xs uppercase tracking-widest sm:inline"
@@ -2011,6 +1872,36 @@ export default function Home() {
                     <span style={{ color: "var(--ink)" }}>{accent}</span>
                   </div>
                 </label>
+              </div>
+              <div
+                className="mt-3 border-t pt-3"
+                style={{
+                  borderColor:
+                    "color-mix(in srgb, var(--ink) 6%, transparent)",
+                }}
+              >
+                <div
+                  className="mb-2 font-mono text-[10px] uppercase tracking-widest"
+                  style={{ color: "var(--ink-faint)" }}
+                >
+                  Vibe
+                </div>
+                <VibePicker value={vibe} onChange={setVibe} />
+              </div>
+              <div
+                className="mt-3 border-t pt-3"
+                style={{
+                  borderColor:
+                    "color-mix(in srgb, var(--ink) 6%, transparent)",
+                }}
+              >
+                <div
+                  className="mb-2 font-mono text-[10px] uppercase tracking-widest"
+                  style={{ color: "var(--ink-faint)" }}
+                >
+                  Typeface
+                </div>
+                <TypefacePicker value={typeface} onChange={setTypeface} />
               </div>
             </div>
 

@@ -19,6 +19,13 @@ const MIME_BY_EXT: Record<string, string> = {
 const loadImageAsBase64 = async (
   screenshotUrl: string,
 ): Promise<{ base64: string; mimeType: string }> => {
+  // data:image/png;base64,XXXX → split directly
+  if (screenshotUrl.startsWith("data:")) {
+    const match = screenshotUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) throw new Error("Invalid data URL");
+    return { base64: match[2], mimeType: match[1] };
+  }
+  // Local dev filesystem (only ever set when running outside Vercel)
   if (screenshotUrl.startsWith("/uploads/")) {
     const filePath = join(process.cwd(), "public", screenshotUrl);
     const buffer = await readFile(filePath);
@@ -39,7 +46,7 @@ const loadImageAsBase64 = async (
     return { base64: buffer.toString("base64"), mimeType: contentType };
   }
   throw new Error(
-    `Unsupported screenshot URL: ${screenshotUrl} (expected /uploads/ or http(s))`,
+    `Unsupported screenshot URL: ${screenshotUrl} (expected data:, /uploads/, or http(s))`,
   );
 };
 

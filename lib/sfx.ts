@@ -34,6 +34,8 @@ export const defaultSfxForScene = (
       return "switch";
     case "uiShowcase":
       return "whoosh";
+    case "aiShot":
+      return "whoosh";
   }
 };
 

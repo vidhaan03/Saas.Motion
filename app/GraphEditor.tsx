@@ -86,6 +86,12 @@ const GraphCanvas: React.FC<Props> = ({
   const [nodes, setNodes] = useState<Node[]>(initial.nodes);
   const [edges, setEdges] = useState<Edge[]>(initial.edges);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // While a node is dragged, this holds the id of the edge it's about to
+  // splice into (if any). Used both for visual feedback during the drag
+  // and to compute the snap position on drop.
+  const [spliceTargetEdgeId, setSpliceTargetEdgeId] = useState<string | null>(
+    null,
+  );
   const [popoverAnchor, setPopoverAnchor] = useState<{
     x: number;
     y: number;
@@ -287,12 +293,112 @@ const GraphCanvas: React.FC<Props> = ({
     [nodes],
   );
 
-  const onNodeDragStop = useCallback(() => {
-    setNodes((current) => {
-      setEdges(rewireEdgesByPosition(current));
-      return current;
-    });
-  }, []);
+  // Approximate node height for hit-testing. Scene nodes are tall (live
+  // thumbnail) so this is generous; the y-tolerance below also helps.
+  const NODE_HEIGHT_APPROX = 360;
+
+  // While dragging, find an edge whose horizontal span the dragged node's
+  // center falls inside (and whose vertical position is reasonably close
+  // to the chain). Edges that touch the dragged node are skipped.
+  const onNodeDrag = useCallback(
+    (_event: React.MouseEvent, draggedNode: Node) => {
+      if (edges.length === 0) {
+        setSpliceTargetEdgeId((prev) => (prev === null ? prev : null));
+        return;
+      }
+      const dCx = draggedNode.position.x + NODE_WIDTH / 2;
+      const dCy = draggedNode.position.y + NODE_HEIGHT_APPROX / 2;
+
+      let best: { id: string; dist: number } | null = null;
+      for (const edge of edges) {
+        if (edge.source === draggedNode.id || edge.target === draggedNode.id) {
+          continue;
+        }
+        const source = nodes.find((n) => n.id === edge.source);
+        const target = nodes.find((n) => n.id === edge.target);
+        if (!source || !target) continue;
+
+        const sCx = source.position.x + NODE_WIDTH / 2;
+        const tCx = target.position.x + NODE_WIDTH / 2;
+        const sCy = source.position.y + NODE_HEIGHT_APPROX / 2;
+        const tCy = target.position.y + NODE_HEIGHT_APPROX / 2;
+
+        const minX = Math.min(sCx, tCx);
+        const maxX = Math.max(sCx, tCx);
+        if (dCx < minX || dCx > maxX) continue;
+
+        // Allow generous vertical slack so users don't have to be pixel-precise.
+        const yTolerance = NODE_HEIGHT_APPROX;
+        if (
+          Math.abs(dCy - sCy) > yTolerance &&
+          Math.abs(dCy - tCy) > yTolerance
+        ) {
+          continue;
+        }
+
+        const mCx = (sCx + tCx) / 2;
+        const mCy = (sCy + tCy) / 2;
+        const dist = Math.hypot(mCx - dCx, mCy - dCy);
+        if (!best || dist < best.dist) best = { id: edge.id, dist };
+      }
+
+      setSpliceTargetEdgeId((prev) => {
+        const next = best?.id ?? null;
+        return prev === next ? prev : next;
+      });
+    },
+    [edges, nodes],
+  );
+
+  const onNodeDragStop = useCallback(
+    (_event: React.MouseEvent, draggedNode: Node) => {
+      const targetEdgeId = spliceTargetEdgeId;
+      setSpliceTargetEdgeId(null);
+
+      setNodes((current) => {
+        let next = current;
+        if (targetEdgeId) {
+          const edge = edges.find((e) => e.id === targetEdgeId);
+          if (edge) {
+            const source = current.find((n) => n.id === edge.source);
+            const target = current.find((n) => n.id === edge.target);
+            if (source && target) {
+              const midX = (source.position.x + target.position.x) / 2;
+              const midY = (source.position.y + target.position.y) / 2;
+              next = current.map((n) =>
+                n.id === draggedNode.id
+                  ? { ...n, position: { x: midX, y: midY } }
+                  : n,
+              );
+            }
+          }
+        }
+        setEdges(rewireEdgesByPosition(next));
+        return next;
+      });
+    },
+    [edges, spliceTargetEdgeId],
+  );
+
+  // Edges as rendered, with the active splice target painted brighter so
+  // users see exactly where the drop will land.
+  const displayEdges = useMemo(() => {
+    if (!spliceTargetEdgeId) return edges;
+    return edges.map((e) =>
+      e.id === spliceTargetEdgeId
+        ? {
+            ...e,
+            animated: false,
+            style: {
+              ...e.style,
+              stroke: storyboard.brand.accent,
+              strokeWidth: 4,
+              opacity: 1,
+            },
+          }
+        : e,
+    );
+  }, [edges, spliceTargetEdgeId, storyboard.brand.accent]);
 
   const previewStoryboard: Storyboard | null = useMemo(
     () =>
@@ -376,7 +482,7 @@ const GraphCanvas: React.FC<Props> = ({
             className="text-[11px]"
             style={{ color: "var(--ink-faint)" }}
           >
-            Drag handles to reconnect · Hover node for actions
+            Drag a node onto an edge to splice it in · Hover node for actions
           </div>
           <button
             onClick={apply}
@@ -428,11 +534,12 @@ const GraphCanvas: React.FC<Props> = ({
 
           <ReactFlow
             nodes={nodes}
-            edges={edges}
+            edges={displayEdges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onNodeClick={onNodeClick}
+            onNodeDrag={onNodeDrag}
             onNodeDragStop={onNodeDragStop}
             onPaneClick={onPaneClick}
             nodeTypes={nodeTypes}
@@ -613,7 +720,9 @@ const GraphCanvas: React.FC<Props> = ({
                                       ? `${scene.glyphs.map((g) => g.char).join(" → ")} · ${scene.caption ?? ""}`
                                       : scene.type === "productCarousel"
                                         ? `${scene.products.length} products · ${scene.heading ?? ""}`
-                                        : `${scene.frame ?? "browser"} · ${scene.caption ?? ""}`;
+                                        : scene.type === "uiShowcase"
+                                          ? `${scene.frame ?? "browser"} · ${scene.caption ?? ""}`
+                                          : `AI shot · ${scene.caption ?? scene.imagePrompt.slice(0, 32)}`;
                     return (
                       <div
                         key={idx}

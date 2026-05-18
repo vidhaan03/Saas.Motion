@@ -17,6 +17,7 @@ import { CTACard } from "./scenes/CTACard";
 import { MultiScript } from "./scenes/MultiScript";
 import { ProductCarousel } from "./scenes/ProductCarousel";
 import { UiShowcase } from "./scenes/UiShowcase";
+import { AiShot } from "./scenes/AiShot";
 import { sfxUrlFor } from "../lib/sfx";
 import type { Scene, Storyboard } from "./schema";
 
@@ -34,6 +35,8 @@ const renderScene = (
           brand={brand}
           sceneIndex={sceneIndex}
           variant={scene.variant}
+          accentWord={scene.accentWord}
+          decor={scene.decor}
         />
       );
     case "statReveal":
@@ -44,6 +47,7 @@ const renderScene = (
           suffix={scene.suffix}
           brand={brand}
           sceneIndex={sceneIndex}
+          decor={scene.decor}
         />
       );
     case "featureGrid":
@@ -93,6 +97,7 @@ const renderScene = (
           url={scene.url}
           brand={brand}
           sceneIndex={sceneIndex}
+          decor={scene.decor}
         />
       );
     case "multiScript":
@@ -125,6 +130,23 @@ const renderScene = (
           animation={scene.animation}
           caption={scene.caption}
           url={scene.url}
+          brand={brand}
+          sceneIndex={sceneIndex}
+        />
+      );
+    case "aiShot":
+      // imageUrl may be undefined if the FLUX call hasn't returned yet
+      // (or failed). AiShot itself handles that case by showing the
+      // caption on a black background with the camera motion still
+      // running — so the scene is never "broken".
+      return (
+        <AiShot
+          imageUrl={scene.imageUrl ?? ""}
+          caption={scene.caption}
+          subcaption={scene.subcaption}
+          motion={scene.motion}
+          overlay={scene.overlay}
+          captionPosition={scene.captionPosition}
           brand={brand}
           sceneIndex={sceneIndex}
         />
@@ -183,6 +205,8 @@ const defaultTransitionForType = (
     case "productCarousel":
       return "slide-left";
     case "uiShowcase":
+      return "fade";
+    case "aiShot":
       return "fade";
   }
 };

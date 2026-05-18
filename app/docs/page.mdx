@@ -1,0 +1,43 @@
+# motion.saas — internal docs
+
+Prompt → SaaS launch ad. This document explains how the system fits together so anyone can extend it.
+
+## What this is
+
+A web app that takes a one-line prompt + a brand kit and generates a short vertical motion-graphics ad. Behind the user-facing form, an **agentic pipeline** plans the ad, writes copy for each scene, and renders the result client-side with [Remotion](https://www.remotion.dev/).
+
+Stack:
+
+- **Next.js 16** (App Router, Turbopack) — front-end shell + API routes
+- **Remotion 4** — composition + browser-side render via `@remotion/player`
+- **Tailwind v4** — styles
+- **Gemini 2.5 Flash Lite** (primary) and **NVIDIA NIM Gemma-4-31B** (fallback) — LLM agents
+- **Zod 4** — runtime schema validation between agents
+
+## What's in this docs site
+
+- [Setup & env vars](/docs/setup) — get the dev server running with the right keys
+- [How it works](/docs/architecture) — top-down view of input → output
+- [Agent pipeline](/docs/agents) — Director + Specialists, race-yield, fallbacks
+- [API routes](/docs/api) — `/api/generate`, `/api/vision`, `/api/upload`
+- [Scene types](/docs/scenes) — all 10 scene templates with examples
+
+## The 60-second tour
+
+1. User types a prompt and brand color, hits Generate
+2. Frontend POSTs to `/api/generate`, opens an SSE stream
+3. **Director agent** picks 4–6 scene types in order
+4. **N specialists** run in parallel — each writes copy for one scene type
+5. Scenes race-yield through the stream as they complete (out of order if needed)
+6. Frontend builds the storyboard incrementally and renders it in the Player
+7. Trace UI shows each agent's status live
+
+The whole loop takes ~6–10 seconds on Gemini Flash Lite. Mock fallback is ~50ms if no LLM is reachable.
+
+## Why a docs site exists at all
+
+Three reasons:
+
+1. **Handoff** — anyone joining the project can read this instead of reverse-engineering 1500 lines of code
+2. **Surface area** — the system has 10 scene types, 3 API routes, an agent pipeline, a vision endpoint, and an SFX system. That's not memorable without a reference
+3. **Honesty** — writing docs forces you to notice when something is hard to explain, which usually means the design is wrong

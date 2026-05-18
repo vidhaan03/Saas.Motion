@@ -1,0 +1,105 @@
+# Scene types
+
+Ten scene types are wired end-to-end (schema → specialist agent → Remotion component → ORDER list label).
+
+Every scene has a `type` discriminator, a `duration` (in frames at 30fps), and optional `voiceover` / `audioUrl` / `sfx` fields shared across all types (audio is parked — see `lib/streamGenerate.ts` comments).
+
+## At a glance
+
+| Type | Duration | Used for | Component |
+|---|---|---|---|
+| `kineticTitle` | 45–80 frames | Hooks, CTAs, transitions | `remotion/scenes/KineticTitle.tsx` |
+| `statReveal` | 60–90 frames | One number with a label — "28,000+ teams" | `remotion/scenes/StatReveal.tsx` |
+| `featureGrid` | 80–120 frames | 2–4 feature cards | `remotion/scenes/FeatureGrid.tsx` |
+| `productDemo` | 90–210 frames | Animated cursor + product UI | `remotion/scenes/ProductDemo.tsx` |
+| `testimonialQuote` | 90–150 frames | Customer quote with attribution | `remotion/scenes/TestimonialQuote.tsx` |
+| `logoWall` | 60–100 frames | "Trusted by" logo grid | `remotion/scenes/LogoWall.tsx` |
+| `ctaCard` | 65–100 frames | Closing call-to-action | `remotion/scenes/CTACard.tsx` |
+| `multiScript` | 90–150 frames | Multilingual / multi-script type animation | `remotion/scenes/MultiScript.tsx` |
+| `productCarousel` | 120–180 frames | E-commerce product cards | `remotion/scenes/ProductCarousel.tsx` |
+| `uiShowcase` | 90–180 frames | Framed UI screenshot with animation | `remotion/scenes/UiShowcase.tsx` |
+
+## Common contract
+
+All scenes accept `brand: { name, color, accent }`. They're expected to:
+
+- Animate in within ~6–12 frames (≈0.2–0.4s at 30fps)
+- Hold the main content for the middle stretch
+- Animate out within ~6–12 frames at the end
+
+Animation is done with Remotion's `interpolate` + `spring`. Easing convention: `Easing.bezier(0.16, 1, 0.3, 1)` for swoop-in motion, `Easing.bezier(0.32, 0.72, 0, 1)` for zoom and scale.
+
+## Voice & style guardrails
+
+The specialists' prompts enforce these constraints when writing copy:
+
+- **No emoji** in any copy (premium voice — Apple, Linear, Vercel)
+- **Max 6 words per text line**, most under 4
+- **Numeric values** as plain digits with no commas (`"28000"` not `"28,000"`) — `StatReveal` formats them at render time
+- **Specific** rather than abstract — "Ship faster every sprint" not "Increase productivity"
+
+## Adding a new scene type
+
+The most common extension. Five steps:
+
+1. **Schema** — add a `z.object(...)` with the discriminator literal and props to `remotion/schema.ts`. Add it to the discriminated union.
+2. **Component** — new file in `remotion/scenes/`. Reads its props + `brand` + `useCurrentFrame()`. Renders inside an `<AbsoluteFill>`.
+3. **Specialist instruction** — add an entry to `SPECIALIST_INSTRUCTIONS` in `lib/streamGenerate.ts` with the schema fragment and any per-type style rules.
+4. **Director awareness** — add the type to `ALL_SCENE_TYPES` and the duration-range hint in `DIRECTOR_SYSTEM`.
+5. **UI labels** — extend the `sceneLabel` and `sceneIcon` helpers in `app/page.tsx`. Add to the `cream theme` short-label switch in the ORDER row renderer.
+
+Test by adding it to one of the [presets](#) (or just trigger generation with a prompt that nudges toward it).
+
+## Sample scene JSON
+
+For reference, what each specialist returns:
+
+### kineticTitle
+```json
+{
+  "type": "kineticTitle",
+  "duration": 70,
+  "lines": ["Meetings drag.", "Work stops."],
+  "variant": "mask"
+}
+```
+
+### statReveal
+```json
+{
+  "type": "statReveal",
+  "duration": 75,
+  "value": "28000",
+  "label": "Engineering teams trust Beacon",
+  "suffix": "+",
+  "variant": "count"
+}
+```
+
+### featureGrid
+```json
+{
+  "type": "featureGrid",
+  "duration": 100,
+  "heading": "Built for momentum",
+  "features": [
+    { "title": "Async", "body": "Standups without meetings." },
+    { "title": "Open", "body": "Connects to every tool." },
+    { "title": "Fast", "body": "Setup in 60 seconds." }
+  ]
+}
+```
+
+### ctaCard
+```json
+{
+  "type": "ctaCard",
+  "duration": 75,
+  "headline": "Start free",
+  "subtext": "No credit card.",
+  "buttonLabel": "Try Beacon",
+  "variant": "scale"
+}
+```
+
+For full schemas, see `remotion/schema.ts`.

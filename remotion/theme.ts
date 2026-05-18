@@ -57,3 +57,35 @@ export const themeForScene = (
   if (override) return override;
   return idx % 2 === 0 ? "dark" : "light";
 };
+
+// Production-grade text treatment. Hero mode gives big text a subtle
+// vertical gradient fill (slightly brighter top, dimmer bottom) so it
+// reads as lit. Body mode passes through flat colour. No drop shadows —
+// the glow-y treatment made text look like a 2010 web banner.
+//
+// Spread the result onto a div's style. Use `mode: "hero"` for large
+// headlines (gradient), `body` for smaller copy (flat colour).
+export const productionTextStyle = (
+  baseColor: string,
+  _accentColor: string,
+  mode: "hero" | "body" = "hero",
+  theme: "dark" | "light" = "dark",
+): React.CSSProperties => {
+  if (mode === "body") {
+    return { color: baseColor };
+  }
+
+  // Hero mode — gradient only. Slightly fainter bottom stop suggests
+  // top-down lighting; no text-shadow.
+  const stopB =
+    theme === "dark"
+      ? `color-mix(in srgb, ${baseColor} 78%, transparent)`
+      : `color-mix(in srgb, ${baseColor} 88%, transparent)`;
+  return {
+    backgroundImage: `linear-gradient(180deg, ${baseColor} 0%, ${stopB} 100%)`,
+    backgroundClip: "text",
+    WebkitBackgroundClip: "text",
+    color: "transparent",
+    WebkitTextFillColor: "transparent",
+  };
+};

@@ -85,6 +85,12 @@ const TYPE_META: Record<
     accent: "#8B5CF6",
     description: "Web/phone frame + uploaded screenshot + animation",
   },
+  aiShot: {
+    label: "AI Shot",
+    icon: "✦",
+    accent: "#EC4899",
+    description: "FLUX-generated cinematic shot with caption overlay",
+  },
 };
 
 const sceneSummary = (scene: Scene): string => {
@@ -109,6 +115,10 @@ const sceneSummary = (scene: Scene): string => {
       return `${scene.products.length} products · ${scene.heading ?? "Carousel"}`;
     case "uiShowcase":
       return `${scene.frame ?? "browser"} · ${scene.animation ?? "scroll"} · ${scene.caption ?? scene.url ?? ""}`;
+    case "aiShot":
+      return scene.caption
+        ? `"${scene.caption.slice(0, 36)}" · ${scene.motion ?? "push-in"}`
+        : scene.imagePrompt.slice(0, 60);
   }
 };
 
@@ -420,7 +430,7 @@ export const SceneNode: React.FC<NodeProps> = ({ id, data, selected }) => {
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
-            className="nodrag w-[640px] max-w-[90vw] max-h-[85vh] overflow-y-auto rounded-2xl border border-white/15 bg-[#0c0c10]/95 p-6 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.9)] backdrop-blur-xl"
+            className="nodrag nowheel w-[640px] max-w-[90vw] max-h-[85vh] overflow-y-auto rounded-2xl border border-white/15 bg-[#0c0c10]/95 p-6 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.9)] backdrop-blur-xl"
             style={{
               // SceneEditor is designed for a dark surface (white text on dark).
               // Force dark regardless of the surrounding theme so labels stay

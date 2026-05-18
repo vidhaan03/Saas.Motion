@@ -38,6 +38,9 @@ const pingNvidia = async (model: string): Promise<ProviderResult> => {
         max_tokens: 8,
         temperature: 0,
       }),
+      // Per-probe timeout so Vercel hobby's 10s function cap isn't exceeded
+      // when a model cold-starts slowly.
+      signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
@@ -75,6 +78,7 @@ const pingGemini = async (): Promise<ProviderResult> => {
         contents: [{ role: "user", parts: [{ text: "Reply with the single word OK." }] }],
         generationConfig: { temperature: 0, maxOutputTokens: 8 },
       }),
+      signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => "");

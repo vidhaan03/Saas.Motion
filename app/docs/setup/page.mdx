@@ -1,0 +1,76 @@
+# Setup & env vars
+
+## Run the dev server
+
+```bash
+cd /Users/intern-vidhan/Documents/motion-saas-demo
+npm install
+npm run dev
+```
+
+App opens at `http://localhost:3000`. Hot reload via Turbopack.
+
+## Environment variables
+
+All env reads happen server-side in API routes and `lib/streamGenerate.ts`. Put them in `.env.local` (gitignored).
+
+### Required for non-mock generation
+
+```bash
+# Either of these gets you off the mock generator:
+GEMINI_API_KEY=AIza...            # https://aistudio.google.com/apikey — free tier
+NVIDIA_NIM_API_KEY=nvapi-...      # https://build.nvidia.com — 1000 free credits
+```
+
+If neither is set, the mock generator runs. The app still works, scenes still render, but the copy is templated rather than AI-written.
+
+### Optional model overrides
+
+```bash
+GEMINI_MODEL=gemini-2.5-flash-lite      # default — fastest, ~2.3s/call
+# GEMINI_MODEL=gemini-2.5-flash         # better copy, ~6-8s/call
+# GEMINI_MODEL=gemini-3-flash-preview   # newest but rate-limited on free tier
+
+NVIDIA_NIM_MODEL=google/gemma-4-31b-it  # default fallback
+# Some other useful NIM models:
+# meta/llama-3.3-70b-instruct           # fast (~4s), good quality
+# nvidia/llama-3.3-nemotron-super-49b-v1.5  # slow but reasoning-capable
+```
+
+### Timeouts (rarely needed)
+
+```bash
+NVIDIA_NIM_TIMEOUT_MS=15000   # cold-start tolerance on NIM, default 15s
+GEMINI_TIMEOUT_MS=20000       # Gemini per-call cap, default 20s
+```
+
+## Free-tier reality check
+
+Gemini's free tier on `gemini-2.5-flash-lite` allows roughly:
+
+- **1,500 RPD** (requests per day)
+- **15 RPM** (requests per minute)
+- **1M TPM** (tokens per minute)
+
+One ad generation = 1 Director call + N Specialist calls (5–6 per ad) = **~7 requests per ad**. That's ~200 ads/day before exhausting RPD. Plenty for prototyping.
+
+When you exceed the free tier:
+
+- Paid Gemini 2.5 Flash Lite: $0.10 / 1M input tokens, $0.40 / 1M output. ~$0.001 per ad. Effectively free.
+- Or fall through to NIM (separate quota, also free up to 1k credits).
+
+## Reset state if quota is exhausted
+
+If `/api/generate` returns 429 (rate limit) repeatedly:
+
+1. Switch model: `GEMINI_MODEL=gemini-2.5-flash-lite` → `gemini-2.5-flash` (separate per-model bucket)
+2. Or switch provider: comment out `GEMINI_API_KEY` so it falls through to NIM
+3. Or wait — RPD resets at 00:00 PT each day (12:30 PM IST)
+
+## Production deployment
+
+Not done yet. The app works on Vercel out of the box (it's just Next.js), but you'll need to:
+
+- Move env vars to Vercel's project settings
+- Decide on render strategy (Remotion `<Player>` in browser is fine for preview; MP4 export requires Remotion Lambda)
+- Likely add billing/auth — currently none

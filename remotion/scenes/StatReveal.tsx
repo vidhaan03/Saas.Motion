@@ -4,15 +4,11 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
-import { loadFont } from "@remotion/google-fonts/Inter";
-import type { Brand } from "../schema";
-import { THEME, ease } from "../theme";
-import { Grain } from "../components/Grain";
-
-const { fontFamily } = loadFont("normal", {
-  weights: ["300", "400", "500", "900"],
-  subsets: ["latin"],
-});
+import type { Brand, DecorElement } from "../schema";
+import { resolveTypeface } from "../fonts";
+import { resolveVibe } from "../vibes";
+import { THEME, productionTextStyle } from "../theme";
+import { ProductionBackdrop } from "../components/ProductionBackdrop";
 
 type Props = {
   value: string;
@@ -20,6 +16,7 @@ type Props = {
   suffix?: string;
   brand: Brand;
   sceneIndex?: number;
+  decor?: DecorElement[];
 };
 
 const parseNumeric = (value: string) => {
@@ -49,14 +46,34 @@ export const StatReveal: React.FC<Props> = ({
   suffix,
   brand,
   sceneIndex = 0,
+  decor,
 }) => {
   const frame = useCurrentFrame();
   const { durationInFrames } = useVideoConfig();
 
   const isLight = sceneIndex % 2 === 1;
-  const bg = isLight ? THEME.bg.light : THEME.bg.dark;
-  const fg = isLight ? THEME.text.onLight : THEME.text.onDark;
+  const themeMode: "dark" | "light" = isLight ? "light" : "dark";
   const muted = isLight ? THEME.text.onLightMuted : THEME.text.onDarkMuted;
+  const vibe = resolveVibe(brand.vibe);
+  const { family: fontFamily } = resolveTypeface(
+    undefined,
+    brand.typeface ?? vibe.typefaceBias,
+  );
+
+  // Value gets gradient + glow (hero treatment) in accent colour. Label
+  // gets glow only (body treatment) in muted colour.
+  const valueTextStyle = productionTextStyle(
+    brand.accent,
+    brand.accent,
+    "hero",
+    themeMode,
+  );
+  const labelTextStyle = productionTextStyle(
+    muted,
+    brand.accent,
+    "body",
+    themeMode,
+  );
 
   const parsed = parseNumeric(value);
   const countT = interpolate(
@@ -66,7 +83,7 @@ export const StatReveal: React.FC<Props> = ({
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-      easing: ease.expoOut,
+      easing: vibe.easeEntrance,
     },
   );
 
@@ -77,7 +94,7 @@ export const StatReveal: React.FC<Props> = ({
   const labelT = interpolate(frame, [14, 34], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
-    easing: ease.expoOut,
+    easing: vibe.easeEntrance,
   });
 
   const exitT = interpolate(
@@ -104,63 +121,73 @@ export const StatReveal: React.FC<Props> = ({
   );
   const suffixFontSize = Math.round(valueFontSize * 0.5);
 
+  const backdropIntensity: "quiet" | "balanced" | "rich" =
+    vibe.intensity < 0.85 ? "quiet" : vibe.intensity > 1.2 ? "rich" : "balanced";
+
   return (
-    <AbsoluteFill style={{ background: bg, opacity: exitT }}>
-      <AbsoluteFill
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: `${THEME.padding.scene}px 80px`,
-          gap: 36,
-        }}
+    <AbsoluteFill style={{ opacity: exitT }}>
+      <ProductionBackdrop
+        brand={brand}
+        theme={themeMode}
+        intensity={backdropIntensity}
+        decorSeed={sceneIndex}
+        decor={decor}
       >
-        <div
+        <AbsoluteFill
           style={{
-            fontFamily,
-            fontWeight: THEME.weight.black,
-            fontSize: valueFontSize,
-            letterSpacing: THEME.tracking.hero,
-            color: brand.accent,
-            lineHeight: 1,
             display: "flex",
-            alignItems: "baseline",
-            transform: `translateY(${interpolate(countT, [0, 1], [20, 0])}px)`,
-            opacity: countT,
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: `${THEME.padding.scene}px 80px`,
+            gap: 36,
           }}
         >
-          {displayValue}
-          {suffix ? (
-            <span
-              style={{
-                fontSize: suffixFontSize,
-                marginLeft: 6,
-                opacity: 0.9,
-              }}
-            >
-              {suffix}
-            </span>
-          ) : null}
-        </div>
-        <div
-          style={{
-            fontFamily,
-            fontWeight: THEME.weight.medium,
-            fontSize: THEME.size.body,
-            letterSpacing: THEME.tracking.label,
-            textTransform: "uppercase",
-            color: muted,
-            textAlign: "center",
-            maxWidth: contentWidth,
-            transform: `translateY(${interpolate(labelT, [0, 1], [12, 0])}px)`,
-            opacity: labelT,
-          }}
-        >
-          {label}
-        </div>
-      </AbsoluteFill>
-      <Grain opacity={0.04} />
+          <div
+            style={{
+              fontFamily,
+              fontWeight: THEME.weight.black,
+              fontSize: valueFontSize,
+              letterSpacing: THEME.tracking.hero,
+              lineHeight: 1,
+              display: "flex",
+              alignItems: "baseline",
+              transform: `translateY(${interpolate(countT, [0, 1], [20, 0])}px)`,
+              opacity: countT,
+              ...valueTextStyle,
+            }}
+          >
+            {displayValue}
+            {suffix ? (
+              <span
+                style={{
+                  fontSize: suffixFontSize,
+                  marginLeft: 6,
+                  opacity: 0.9,
+                }}
+              >
+                {suffix}
+              </span>
+            ) : null}
+          </div>
+          <div
+            style={{
+              fontFamily,
+              fontWeight: THEME.weight.medium,
+              fontSize: THEME.size.body,
+              letterSpacing: THEME.tracking.label,
+              textTransform: "uppercase",
+              textAlign: "center",
+              maxWidth: contentWidth,
+              transform: `translateY(${interpolate(labelT, [0, 1], [12, 0])}px)`,
+              opacity: labelT,
+              ...labelTextStyle,
+            }}
+          >
+            {label}
+          </div>
+        </AbsoluteFill>
+      </ProductionBackdrop>
     </AbsoluteFill>
   );
 };

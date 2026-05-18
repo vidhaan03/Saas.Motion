@@ -1,0 +1,100 @@
+# How it works
+
+End-to-end flow from prompt to rendered video, in five layers.
+
+## The request
+
+User fills out the prompt + brand kit in the left pane of `app/page.tsx`, hits Generate.
+
+The frontend opens an SSE stream against `/api/generate` with this body:
+
+```json
+{
+  "prompt": "Launch ad for Beacon, our async standup tool used by 28000 teams",
+  "brand": { "name": "Beacon", "color": "#0EA5E9", "accent": "#22D3EE" }
+}
+```
+
+## The pipeline
+
+`app/api/generate/route.ts` is a thin wrapper. The real work lives in `lib/streamGenerate.ts` as an async generator called `streamStoryboard`. It yields one of these event types over SSE:
+
+| Event | Emitted when | Used by frontend for |
+|---|---|---|
+| `agent` | Director or Specialist starts/finishes/fails | Trace UI status pills |
+| `meta` | Director done, plan known | Setting expected scene count |
+| `scene` | A specialist successfully produces a scene | Appending to storyboard, Player remount |
+| `done` | All specialists complete | Final state, save to localStorage |
+| `error` | Unrecoverable failure | Show error toast |
+
+The orchestrator:
+
+1. Yields `agent director thinking`
+2. Calls `runDirector(prompt, brand)` — one LLM call, returns scene plan + reasoning
+3. Yields `agent director done` with timing
+4. Yields `meta` with total scene count
+5. Kicks off **N parallel** `runSpecialist(plan[i], brand)` calls — one per scene
+6. Yields `agent specialist N thinking` for each
+7. Races them with `Promise.race` — first to finish yields its `agent specialist N done` + `scene`
+8. Repeats until all specialists settle
+9. Yields `done` with the full storyboard
+
+## The fallback chain
+
+Each LLM call tries providers in order:
+
+```
+Gemini 2.5 Flash Lite (~2.3s) ──fail──▶ NIM Gemma-4-31B (~5-15s) ──fail──▶ null
+```
+
+If both fail for the Director, the whole pipeline falls back to `mockGenerate()` which produces a deterministic 4-scene storyboard. The app never returns "nothing."
+
+If a Specialist fails, only its scene is dropped. The storyboard ships with the remaining scenes.
+
+## The render layer
+
+`remotion/Video.tsx` is a `<Composition>` that takes a `storyboard` prop and walks `storyboard.scenes`, wrapping each in a `<Sequence from={cursor} durationInFrames={scene.duration}>`. The cursor advances by each scene's duration so they play in order.
+
+Each scene type has its own React component under `remotion/scenes/`. The component reads its props (e.g. `lines`, `value`, `heading`) and animates with Remotion's `interpolate` + `spring` primitives. No videos are pre-rendered — everything is React + CSS + sometimes Three.js, evaluated frame-by-frame.
+
+The browser preview uses `@remotion/player`. Server-side render to MP4 is possible via `remotion render` (the CLI) but not wired into the UI yet.
+
+## Where the boundaries are
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Frontend                                                          │
+│   app/page.tsx                                                    │
+│     - prompt UI                                                   │
+│     - SSE stream consumer                                         │
+│     - trace state                                                 │
+│     - <Player> mount                                              │
+│     - ORDER list with status pills                                │
+└────────────────────────┬────────────────────────────────────────┘
+                         │ POST /api/generate (SSE)
+┌────────────────────────▼────────────────────────────────────────┐
+│ API route                                                         │
+│   app/api/generate/route.ts                                       │
+│     - validates request body with zod                             │
+│     - wraps streamStoryboard in a ReadableStream                  │
+└────────────────────────┬────────────────────────────────────────┘
+                         │ async generator yields StreamEvents
+┌────────────────────────▼────────────────────────────────────────┐
+│ Orchestrator                                                      │
+│   lib/streamGenerate.ts                                           │
+│     - runDirector (1 LLM call)                                    │
+│     - runSpecialist x N (parallel LLM calls)                      │
+│     - race-yield pattern                                          │
+│     - fallback chain                                              │
+└────────────────────────┬────────────────────────────────────────┘
+                         │ Storyboard JSON
+┌────────────────────────▼────────────────────────────────────────┐
+│ Render                                                            │
+│   remotion/Video.tsx                                              │
+│     - <Composition> takes storyboard prop                         │
+│     - maps to <Sequence> per scene                                │
+│     - delegates to scene component (KineticTitle, StatReveal…)   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Each layer has one job. Replacing any one (e.g. swap out the LLM provider, or swap Remotion for a different render engine) doesn't touch the others.

@@ -18,6 +18,15 @@ const extFromMime = (mime: string): string => {
   return "bin";
 };
 
+// Three storage modes, decided at request time:
+//
+//   1. Vercel Blob   — if BLOB_READ_WRITE_TOKEN is present, use the official
+//                      @vercel/blob SDK for persistent URLs.
+//   2. Filesystem    — local dev (no VERCEL env var). Writes to /public/uploads.
+//   3. Data URL      — fallback when on Vercel without Blob configured. No
+//                      persistent storage; the base64 lives in the storyboard
+//                      JSON itself. Fine for prototype, bloats localStorage
+//                      for large libraries.
 export async function POST(request: Request) {
   let formData: FormData;
   try {
@@ -47,13 +56,47 @@ export async function POST(request: Request) {
   const hash = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
   const ext = extFromMime(file.type);
   const filename = `${hash}.${ext}`;
-  const uploadDir = join(process.cwd(), "public", "uploads");
-  await mkdir(uploadDir, { recursive: true });
-  await writeFile(join(uploadDir, filename), bytes);
 
-  return Response.json({
-    url: `/uploads/${filename}`,
-    width: undefined,
-    height: undefined,
-  });
+  // ─── 1) Vercel Blob (preferred when configured) ───
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      const { put } = await import("@vercel/blob");
+      const blob = await put(`uploads/${filename}`, Buffer.from(bytes), {
+        access: "public",
+        contentType: file.type,
+        addRandomSuffix: false,
+        allowOverwrite: true,
+      });
+      return Response.json({ url: blob.url, source: "blob" });
+    } catch (e) {
+      console.warn(
+        "[upload] Vercel Blob failed, falling through:",
+        e instanceof Error ? e.message : String(e),
+      );
+      // fall through to data-URL fallback
+    }
+  }
+
+  // ─── 2) Filesystem (local dev only — Vercel serverless FS is read-only) ───
+  // Detect Vercel by the auto-set VERCEL env var; only attempt FS writes when
+  // we're definitely outside a serverless environment.
+  if (!process.env.VERCEL) {
+    try {
+      const uploadDir = join(process.cwd(), "public", "uploads");
+      await mkdir(uploadDir, { recursive: true });
+      await writeFile(join(uploadDir, filename), bytes);
+      return Response.json({ url: `/uploads/${filename}`, source: "fs" });
+    } catch (e) {
+      console.warn(
+        "[upload] FS write failed, falling through to data-URL:",
+        e instanceof Error ? e.message : String(e),
+      );
+      // fall through
+    }
+  }
+
+  // ─── 3) Data URL fallback (always works) ───
+  const base64 = Buffer.from(bytes).toString("base64");
+  const dataUrl = `data:${file.type};base64,${base64}`;
+  return Response.json({ url: dataUrl, source: "data-url" });
 }

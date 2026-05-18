@@ -29,10 +29,17 @@
 // import Anthropic from "@anthropic-ai/sdk";
 import {
   sceneSchema,
+  decorElementSchema,
   type Brand,
+  type DecorElement,
   type Scene,
   type Storyboard,
 } from "../remotion/schema";
+import { ICON_DESCRIPTIONS, type IconName } from "../remotion/decorIcons";
+// Server-safe vibe resolver — pulls data without importing Remotion's
+// Easing (which transitively requires React.createContext and crashes
+// in the Node runtime).
+import { resolveVibeData } from "../remotion/vibeKeys";
 // SYSTEM_PROMPT / buildUserPrompt belong to the older monolithic flow.
 // Retained import so the commented-out code below still type-checks.
 import { SYSTEM_PROMPT as _LEGACY_SYSTEM_PROMPT } from "./buildPrompt";
@@ -252,8 +259,8 @@ const callGeminiChat = async (
 // Older order (Gemini → NIM) was hitting Gemini's 1500 req/day free-tier
 // quota; with 1 director + 5 specialists per generation that cap is
 // reached in ~250 generations, after which every call 429s.
-type AgentSource = "nim-gemma" | "gemini";
-const agentCall = async (
+export type AgentSource = "nim-gemma" | "gemini";
+export const agentCall = async (
   system: string,
   user: string,
   maxTokens: number,
@@ -313,15 +320,51 @@ type ScenePlan = {
   type: Scene["type"];
   duration: number;
   brief: string;
+  decor?: DecorElement[];
 };
 
+// Build the icon catalogue once at module load so the prompt stays in
+// sync with whatever names decorIcons.ts declares.
+const ICON_CATALOG = (
+  Object.keys(ICON_DESCRIPTIONS) as IconName[]
+)
+  .map((n) => `  - "${n}": ${ICON_DESCRIPTIONS[n]}`)
+  .join("\n");
+
 const DIRECTOR_SYSTEM = `You are the Director agent for a motion-graphics ad storyboard.
+
+You are NOT a random storyboard generator. You think like a creative director
+at an agency: before picking scene types and decor, you REASON about the
+brand's design language and choose visual elements that EXPRESS it.
+
+═══════════════ STEP 1 — Brand design-language reasoning ═══════════════
+
+Before producing the plan, mentally answer these questions:
+  1. What vertical is this brand in? (telephony / dev tools / analytics /
+     payments / AI / security / consumer / etc.)
+  2. What visual style would feel NATIVE to a launch ad for this brand?
+     Pick one of: technical-minimal, warm-friendly, editorial-bold,
+     designer-experimental, corporate-trustworthy, energetic-startup.
+  3. Which ICONS from the catalogue actually represent this product?
+     Pick a SET of 4-6 semantically tight icons. Don't reach for
+     "abstract" filler — every icon should mean something for THIS brand.
+  4. What MOTION CHARACTER fits the brand? precise & quick (techy /
+     telephony) vs soft & considered (consumer / editorial) vs
+     punchy-overshoot (energetic startup).
+
+You're producing an AD that should feel like the brand made it themselves.
+A telephony product gets phone/wave/signal icons in cool blues, considered
+motion. A dev tool gets code/terminal/cloud, sharp motion. An analytics
+tool gets chart-bar/chart-line/target, precise motion. A security tool
+gets lock/shield/key, slow & trustworthy.
+
+═══════════════ STEP 2 — Output the plan ═══════════════
 
 Given a user brief and brand, produce a high-level plan for a short cinematic 9:16 SaaS ad video. Pick scene TYPES from this fixed list (no inventing types):
 kineticTitle, statReveal, featureGrid, productDemo, testimonialQuote, logoWall, ctaCard, multiScript, productCarousel, uiShowcase
 
 Output JSON with this exact shape:
-{ "plan": [ { "type": "<scene type>", "duration": <integer frames at 30fps>, "brief": "<one sentence>" } ] }
+{ "plan": [ { "type": "<scene type>", "duration": <integer frames at 30fps>, "brief": "<one sentence>", "decor": [<decor elements>] } ] }
 
 Rules:
 - 3 to 6 scenes total. Vary scene types; don't repeat unless intentional.
@@ -332,20 +375,72 @@ Rules:
 - Vary structure: don't always open with kineticTitle.
 - "brief" is ONE sentence (< 20 words) describing the message of that scene only.
 
+DECOR — per-scene motion-graphic background elements. "decor" is an array
+of objects from these three types:
+
+  ORB (3D-shaded sphere, floats slowly):
+    { "type": "orb",
+      "x": <0-100>, "y": <0-100>,        // % of canvas, center-anchored
+      "size": <5-30>,                     // % of shorter axis; >20 is hero-sized
+      "color": "brand" | "accent",
+      "layer": <0.4-1.2> }                // 0.4 = far/blurred, 1.0 = front
+
+  BEAM (volumetric light ray):
+    { "type": "beam",
+      "originX": <-20 to 120>, "originY": <-20 to 120>,
+      "angle": <0-360>,                   // 0=up, 90=right, 180=down
+      "intensity": <0.08-0.4>,
+      "color": "brand" | "accent" }
+
+  PARTICLES (sparkling dust field):
+    { "type": "particles", "density": "sparse" | "dense" }
+
+  ICON (semantic glyph — THIS IS THE MOST IMPORTANT DECOR):
+    { "type": "icon",
+      "name": "<icon from catalogue below>",
+      "x": <-10 to 110>, "y": <-10 to 110>,
+      "size": <3-25>,                     // % of shorter axis; 6-12 typical
+      "color": "brand" | "accent",
+      "layer": <0.4-1.2> }
+    Icon catalogue (pick by MEANING of the product):
+${ICON_CATALOG}
+
+Decor guidance — COHERENCE OVER QUANTITY:
+- Lock in your icon SET from Step 1's design reasoning. Re-use the SAME
+  3-5 icons across scenes (rotated, repositioned, resized). A coherent
+  set of 4 phones/waves/signals across 4 scenes reads as a brand visual
+  language. A random scatter of 10 different icons reads as noise.
+- 2-4 icons per scene. Place at EDGES (x < 30 or x > 70, OR y < 30 or
+  y > 70) so the center is clear. Vary their sizes and layer depths to
+  build depth.
+- Orbs are AMBIENT, not the message. 0-2 per scene, only when the brand
+  reads as "atmospheric" (consumer / AI / editorial). A precise dev-tool
+  brand probably wants zero orbs — the icons carry the meaning.
+- Beams: at most one per scene, originating off-canvas (originY -20 or
+  120). Use only if "atmospheric" or "energetic" feel.
+- Particles: at most one entry per scene. Skip entirely for
+  technical-minimal brands.
+- Vibe overrides quantity ceiling: minimal/editorial → 2-3 total elements
+  per scene; techy/warm → 3-5; energetic/bold → 5-7.
+
 Return ONLY the JSON object.`;
 
 const runDirector = async (
   prompt: string,
   brand: Brand,
 ): Promise<{ plan: ScenePlan[]; source: AgentSource } | null> => {
+  const vibe = resolveVibeData(brand.vibe);
   const user = `Brand: ${brand.name}
 Color: ${brand.color}
 Accent: ${brand.accent}
+Vibe: ${vibe.label} — ${vibe.description}
+Vibe guidance: ${vibe.directorHint}
+Color treatment: ${vibe.colorTreatment}
 
 Ad brief:
 ${prompt}
 
-Produce the plan JSON now.`;
+Produce the plan JSON now. Honour the vibe guidance above when choosing scene types, count, and pacing.`;
 
   // Gemini 2.5 Flash Lite counts internal "thinking" tokens against the
   // same budget as output, so a tight cap (400) leaves only a handful of
@@ -400,10 +495,22 @@ Produce the plan JSON now.`;
       droppedReasons.push(`bad-brief:${i.type}`);
       continue;
     }
+    // Validate decor with Zod element-by-element; silently drop bad
+    // elements so a partial-bad list doesn't trash the whole scene.
+    let decor: DecorElement[] | undefined;
+    if (Array.isArray(i.decor)) {
+      const okElements: DecorElement[] = [];
+      for (const raw of i.decor) {
+        const parsed = decorElementSchema.safeParse(raw);
+        if (parsed.success) okElements.push(parsed.data);
+      }
+      if (okElements.length > 0) decor = okElements;
+    }
     plan.push({
       type: i.type as Scene["type"],
       duration: Math.round(Math.max(30, Math.min(300, dur))),
       brief: i.brief.slice(0, 200),
+      decor,
     });
   }
 
@@ -459,6 +566,13 @@ const SPECIALIST_INSTRUCTIONS: Record<Scene["type"], string> = {
 
   uiShowcase: `Produce a uiShowcase scene as JSON only:
 { "type": "uiShowcase", "duration": <int>, "frame": "browser"|"phone"|"tablet"|"none" (optional), "animation": "scroll"|"zoom-in"|"zoom-out"|"fade"|"tilt"|"static" (optional), "caption": string (optional, <=8 words), "url": string (optional) }`,
+
+  // aiShot scenes don't go through the specialist path — they're
+  // produced by the parallel Visual Director pipeline (lib/visualGenerate.ts)
+  // which calls FLUX directly. This placeholder exists only to satisfy
+  // the exhaustive Record type; it should never be called.
+  aiShot: `Produce an aiShot scene as JSON only:
+{ "type": "aiShot", "duration": <int>, "imagePrompt": string, "caption": string (optional), "motion": "push-in"|"pull-out"|"pan-left"|"pan-right"|"static" (optional), "overlay": "dark"|"light"|"scrim"|"none" (optional) }`,
 };
 
 const SPECIALIST_RULES = `Style: Apple-keynote cinematic. Premium SaaS voice. Confident, no emoji, no marketing fluff. Each text line max 6 words.
@@ -596,7 +710,14 @@ export async function* streamStoryboard(
     const elapsed = Date.now() - (specialistStarts.get(winner.idx) ?? Date.now());
 
     if (winner.result) {
-      scenes[winner.idx] = winner.result.scene;
+      // Merge Director-planned decor onto the specialist's scene. Decor
+      // lives on the plan (Director coordinates atmosphere across the
+      // storyboard), specialists only own scene content.
+      const plannedDecor = plan[winner.idx].decor;
+      const mergedScene = plannedDecor
+        ? ({ ...winner.result.scene, decor: plannedDecor } as Scene)
+        : winner.result.scene;
+      scenes[winner.idx] = mergedScene;
       if (winner.result.source === "gemini") sawGemini = true;
       if (winner.result.source === "nim-gemma") sawGemma = true;
       yield {
@@ -609,7 +730,7 @@ export async function* streamStoryboard(
         ms: elapsed,
         source: winner.result.source,
       };
-      yield { type: "scene", scene: winner.result.scene, index: winner.idx };
+      yield { type: "scene", scene: mergedScene, index: winner.idx };
     } else {
       yield {
         type: "agent",

@@ -1,9 +1,22 @@
 import { z } from "zod";
+// IMPORTANT: import from the server-safe keys module, NOT from fonts.ts.
+// fonts.ts loads Remotion's google-fonts (which need React.createContext),
+// crashing any server-side runtime that imports schema transitively.
+import { TYPEFACE_KEYS } from "./typefaceKeys";
+import { VIBE_KEYS } from "./vibeKeys";
+import { ICON_NAMES } from "./decorIcons";
 
 export const brandSchema = z.object({
   name: z.string(),
   color: z.string(),
   accent: z.string(),
+  // Default typeface for all text-bearing scenes in this storyboard.
+  // Scenes can override via their own `typeface` field; otherwise this
+  // applies. If omitted, falls back to "inter" in resolveTypeface.
+  typeface: z.enum(TYPEFACE_KEYS).optional(),
+  // Vibe drives easing, intensity, decoration density, and Director's
+  // scene-type bias for this storyboard. See remotion/vibes.ts.
+  vibe: z.enum(VIBE_KEYS).optional(),
 });
 
 export const SFX_KEYS = [
@@ -40,6 +53,67 @@ const sceneAudioFields = {
   outTransition: z.enum(TRANSITION_KEYS).optional(),
 };
 
+// ─── Decor (AI-placed motion-graphic elements) ─────────────────────────
+//
+// Director outputs a `decor` array per scene listing the orbs / beams /
+// particle layers it wants for that scene. AtmosphericLayer renders the
+// list verbatim — no hand-picked layout in code.
+//
+// Coordinates are in % of canvas. `color: "brand" | "accent"` resolves
+// against the brand at render time so the same plan reuses across brands.
+
+export const decorOrbSchema = z.object({
+  type: z.literal("orb"),
+  x: z.number().min(-10).max(110),
+  y: z.number().min(-10).max(110),
+  size: z.number().min(4).max(40),
+  color: z.enum(["brand", "accent"]),
+  // 0.4 = far/blurred/slow, 1.0 = front, 1.2 = oversized hero orb.
+  layer: z.number().min(0.3).max(1.4).optional(),
+});
+
+export const decorBeamSchema = z.object({
+  type: z.literal("beam"),
+  originX: z.number().min(-30).max(130),
+  originY: z.number().min(-30).max(130),
+  // 0 = pointing up, 90 = right, 180 = down.
+  angle: z.number().min(-360).max(360),
+  // 0.08-0.4 — Director should keep this restrained.
+  intensity: z.number().min(0.05).max(0.5).optional(),
+  color: z.enum(["brand", "accent"]),
+});
+
+export const decorParticlesSchema = z.object({
+  type: z.literal("particles"),
+  density: z.enum(["sparse", "dense"]),
+});
+
+// Semantic icon: a small stroke-style glyph chosen for what the product
+// IS about (phone for telephony, code for dev tools, lock for security,
+// etc.). Director picks `name` semantically from the catalogue.
+export const decorIconSchema = z.object({
+  type: z.literal("icon"),
+  name: z.enum(ICON_NAMES),
+  x: z.number().min(-10).max(110),
+  y: z.number().min(-10).max(110),
+  size: z.number().min(3).max(25),
+  color: z.enum(["brand", "accent"]),
+  layer: z.number().min(0.3).max(1.4).optional(),
+});
+
+export const decorElementSchema = z.discriminatedUnion("type", [
+  decorOrbSchema,
+  decorBeamSchema,
+  decorParticlesSchema,
+  decorIconSchema,
+]);
+
+export type DecorElement = z.infer<typeof decorElementSchema>;
+
+const sceneDecorFields = {
+  decor: z.array(decorElementSchema).optional(),
+};
+
 export const kineticTitleVariants = ["mask", "typewriter", "scale", "split"] as const;
 export type KineticTitleVariant = (typeof kineticTitleVariants)[number];
 
@@ -49,7 +123,11 @@ export const kineticTitleSchema = z.object({
   lines: z.array(z.string()).min(1).max(3),
   emoji: z.string().optional(),
   variant: z.enum(kineticTitleVariants).optional(),
+  // Word to paint in the brand accent. If omitted, falls back to the
+  // longest word in `lines` (min 4 chars). Set to "" to disable highlight.
+  accentWord: z.string().optional(),
   ...sceneAudioFields,
+  ...sceneDecorFields,
 });
 
 export const statRevealVariants = ["count", "spin", "mask"] as const;
@@ -63,6 +141,7 @@ export const statRevealSchema = z.object({
   suffix: z.string().optional(),
   variant: z.enum(statRevealVariants).optional(),
   ...sceneAudioFields,
+  ...sceneDecorFields,
 });
 
 export const featureGridSchema = z.object({
@@ -74,6 +153,7 @@ export const featureGridSchema = z.object({
     .min(2)
     .max(4),
   ...sceneAudioFields,
+  ...sceneDecorFields,
 });
 
 export const actionSchema = z.discriminatedUnion("type", [
@@ -107,6 +187,7 @@ export const productDemoSchema = z.object({
   caption: z.string().optional(),
   actions: z.array(actionSchema),
   ...sceneAudioFields,
+  ...sceneDecorFields,
 });
 
 export const testimonialQuoteSchema = z.object({
@@ -117,6 +198,7 @@ export const testimonialQuoteSchema = z.object({
   role: z.string().optional(),
   company: z.string().optional(),
   ...sceneAudioFields,
+  ...sceneDecorFields,
 });
 
 export const logoWallSchema = z.object({
@@ -134,6 +216,7 @@ export const logoWallSchema = z.object({
     .min(3)
     .max(12),
   ...sceneAudioFields,
+  ...sceneDecorFields,
 });
 
 export const ctaCardVariants = ["fade", "mask", "scale"] as const;
@@ -148,6 +231,7 @@ export const ctaCardSchema = z.object({
   url: z.string().optional(),
   variant: z.enum(ctaCardVariants).optional(),
   ...sceneAudioFields,
+  ...sceneDecorFields,
 });
 
 export const multiScriptSchema = z.object({
@@ -164,6 +248,7 @@ export const multiScriptSchema = z.object({
     .max(8),
   caption: z.string().optional(),
   ...sceneAudioFields,
+  ...sceneDecorFields,
 });
 
 export const productCarouselStyles = [
@@ -342,6 +427,7 @@ export const uiShowcaseSchema = z.object({
   caption: z.string().optional(),
   url: z.string().optional(),
   ...sceneAudioFields,
+  ...sceneDecorFields,
 });
 
 export const productCarouselSchema = z.object({
@@ -367,6 +453,53 @@ export const productCarouselSchema = z.object({
     .min(2)
     .max(8),
   ...sceneAudioFields,
+  ...sceneDecorFields,
+});
+
+// AI-image-driven shot. The Visual Director plans the imagePrompt; an
+// out-of-band FLUX call generates the imageUrl before render. If
+// imageUrl is missing at render time, AiShot falls back to a black
+// background — the caption still animates.
+export const aiShotMotionKeys = [
+  "push-in",
+  "pull-out",
+  "pan-left",
+  "pan-right",
+  "static",
+] as const;
+export type AiShotMotion = (typeof aiShotMotionKeys)[number];
+
+export const aiShotOverlayKeys = [
+  "dark",
+  "light",
+  "scrim",
+  "none",
+] as const;
+export type AiShotOverlay = (typeof aiShotOverlayKeys)[number];
+
+export const aiShotCaptionPositions = [
+  "bottom",
+  "center",
+  "top",
+] as const;
+export type AiShotCaptionPosition = (typeof aiShotCaptionPositions)[number];
+
+export const aiShotSchema = z.object({
+  type: z.literal("aiShot"),
+  duration: z.number(),
+  // FLUX prompt used to generate imageUrl. Kept so the editor can show
+  // / regenerate the source prompt without round-tripping the LLM.
+  imagePrompt: z.string(),
+  // Set by the orchestrator after FLUX returns. Optional so the schema
+  // accepts a freshly-planned scene before generation completes.
+  imageUrl: z.string().optional(),
+  caption: z.string().optional(),
+  subcaption: z.string().optional(),
+  motion: z.enum(aiShotMotionKeys).optional(),
+  overlay: z.enum(aiShotOverlayKeys).optional(),
+  captionPosition: z.enum(aiShotCaptionPositions).optional(),
+  ...sceneAudioFields,
+  ...sceneDecorFields,
 });
 
 export const sceneSchema = z.discriminatedUnion("type", [
@@ -380,6 +513,7 @@ export const sceneSchema = z.discriminatedUnion("type", [
   multiScriptSchema,
   productCarouselSchema,
   uiShowcaseSchema,
+  aiShotSchema,
 ]);
 
 export const storyboardSchema = z.object({

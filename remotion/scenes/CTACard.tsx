@@ -4,15 +4,11 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
-import { loadFont } from "@remotion/google-fonts/Inter";
-import type { Brand } from "../schema";
-import { THEME, ease } from "../theme";
-import { Grain } from "../components/Grain";
-
-const { fontFamily } = loadFont("normal", {
-  weights: ["300", "400", "500", "700", "900"],
-  subsets: ["latin"],
-});
+import type { Brand, DecorElement } from "../schema";
+import { resolveTypeface } from "../fonts";
+import { resolveVibe } from "../vibes";
+import { THEME, productionTextStyle } from "../theme";
+import { ProductionBackdrop } from "../components/ProductionBackdrop";
 
 type Props = {
   headline: string;
@@ -21,6 +17,7 @@ type Props = {
   url?: string;
   brand: Brand;
   sceneIndex?: number;
+  decor?: DecorElement[];
 };
 
 export const CTACard: React.FC<Props> = ({
@@ -30,35 +27,54 @@ export const CTACard: React.FC<Props> = ({
   url,
   brand,
   sceneIndex = 0,
+  decor,
 }) => {
   const frame = useCurrentFrame();
   const { durationInFrames } = useVideoConfig();
 
   const isLight = sceneIndex % 2 === 1;
-  const bg = isLight ? THEME.bg.light : THEME.bg.dark;
+  const themeMode: "dark" | "light" = isLight ? "light" : "dark";
   const fg = isLight ? THEME.text.onLight : THEME.text.onDark;
   const muted = isLight ? THEME.text.onLightMuted : THEME.text.onDarkMuted;
   const faint = isLight ? THEME.text.onLightFaint : THEME.text.onDarkFaint;
+  const vibe = resolveVibe(brand.vibe);
+  const { family: fontFamily } = resolveTypeface(
+    undefined,
+    brand.typeface ?? vibe.typefaceBias,
+  );
+
+  const headlineTextStyle = productionTextStyle(
+    fg,
+    brand.accent,
+    "hero",
+    themeMode,
+  );
+  const subtextTextStyle = productionTextStyle(
+    muted,
+    brand.accent,
+    "body",
+    themeMode,
+  );
 
   const headlineT = interpolate(frame, [0, 22], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
-    easing: ease.expoOut,
+    easing: vibe.easeEntrance,
   });
   const subT = interpolate(frame, [14, 34], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
-    easing: ease.expoOut,
+    easing: vibe.easeEntrance,
   });
   const buttonT = interpolate(frame, [24, 44], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
-    easing: ease.expoOut,
+    easing: vibe.easeEntrance,
   });
   const urlT = interpolate(frame, [38, 56], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
-    easing: ease.expoOut,
+    easing: vibe.easeEntrance,
   });
   const exitT = interpolate(
     frame,
@@ -86,87 +102,97 @@ export const CTACard: React.FC<Props> = ({
     maxFontByTotal,
   );
 
+  const backdropIntensity: "quiet" | "balanced" | "rich" =
+    vibe.intensity < 0.85 ? "quiet" : vibe.intensity > 1.2 ? "rich" : "balanced";
+
   return (
-    <AbsoluteFill style={{ background: bg, opacity: exitT }}>
-      <AbsoluteFill
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: `${THEME.padding.scene}px 96px`,
-          gap: 36,
-        }}
+    <AbsoluteFill style={{ opacity: exitT }}>
+      <ProductionBackdrop
+        brand={brand}
+        theme={themeMode}
+        intensity={backdropIntensity}
+        decorSeed={sceneIndex}
+        decor={decor}
       >
-        <div
+        <AbsoluteFill
           style={{
-            fontFamily,
-            fontWeight: THEME.weight.black,
-            fontSize: headlineFontSize,
-            lineHeight: 0.95,
-            letterSpacing: THEME.tracking.hero,
-            color: fg,
-            textAlign: "center",
-            maxWidth: contentWidth,
-            wordBreak: "break-word",
-            transform: `translateY(${interpolate(headlineT, [0, 1], [24, 0])}px)`,
-            opacity: headlineT,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: `${THEME.padding.scene}px 96px`,
+            gap: 36,
           }}
         >
-          {headline}
-        </div>
-        {subtext ? (
           <div
             style={{
               fontFamily,
-              fontWeight: THEME.weight.regular,
-              fontSize: 32,
-              lineHeight: 1.3,
-              color: muted,
+              fontWeight: THEME.weight.black,
+              fontSize: headlineFontSize,
+              lineHeight: 0.95,
+              letterSpacing: THEME.tracking.hero,
               textAlign: "center",
-              maxWidth: 720,
-              transform: `translateY(${interpolate(subT, [0, 1], [16, 0])}px)`,
-              opacity: subT,
+              maxWidth: contentWidth,
+              wordBreak: "break-word",
+              transform: `translateY(${interpolate(headlineT, [0, 1], [24, 0])}px)`,
+              opacity: headlineT,
+              ...headlineTextStyle,
             }}
           >
-            {subtext}
+            {headline}
           </div>
-        ) : null}
-        <div
-          style={{
-            marginTop: 24,
-            background: brand.accent,
-            color: isLight ? "#0a0a0c" : "#0a0a0c",
-            fontFamily,
-            fontWeight: THEME.weight.medium,
-            fontSize: 30,
-            padding: "20px 44px",
-            borderRadius: 999,
-            letterSpacing: "0",
-            transform: `translateY(${interpolate(buttonT, [0, 1], [16, 0])}px)`,
-            opacity: buttonT,
-          }}
-        >
-          {buttonLabel}
-        </div>
-        {url ? (
+          {subtext ? (
+            <div
+              style={{
+                fontFamily,
+                fontWeight: THEME.weight.regular,
+                fontSize: 32,
+                lineHeight: 1.3,
+                textAlign: "center",
+                maxWidth: 720,
+                transform: `translateY(${interpolate(subT, [0, 1], [16, 0])}px)`,
+                opacity: subT,
+                ...subtextTextStyle,
+              }}
+            >
+              {subtext}
+            </div>
+          ) : null}
           <div
             style={{
+              marginTop: 24,
+              background: brand.accent,
+              color: "#0a0a0c",
               fontFamily,
-              fontWeight: THEME.weight.regular,
-              fontSize: 22,
-              color: faint,
-              letterSpacing: THEME.tracking.caption,
-              textTransform: "uppercase",
-              transform: `translateY(${interpolate(urlT, [0, 1], [10, 0])}px)`,
-              opacity: urlT,
+              fontWeight: THEME.weight.medium,
+              fontSize: 30,
+              padding: "20px 44px",
+              borderRadius: 999,
+              letterSpacing: "0",
+              transform: `translateY(${interpolate(buttonT, [0, 1], [16, 0])}px)`,
+              opacity: buttonT,
             }}
           >
-            {url}
+            {buttonLabel}
           </div>
-        ) : null}
-      </AbsoluteFill>
-      <Grain opacity={0.04} />
+          {url ? (
+            <div
+              style={{
+                fontFamily,
+                fontWeight: THEME.weight.regular,
+                fontSize: 22,
+                color: faint,
+                letterSpacing: THEME.tracking.caption,
+                textTransform: "uppercase",
+                transform: `translateY(${interpolate(urlT, [0, 1], [10, 0])}px)`,
+                opacity: urlT,
+              }}
+            >
+              {url}
+            </div>
+          ) : null}
+        </AbsoluteFill>
+      </ProductionBackdrop>
     </AbsoluteFill>
   );
 };

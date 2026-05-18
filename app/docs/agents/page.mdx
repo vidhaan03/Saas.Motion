@@ -1,0 +1,100 @@
+# Agent pipeline
+
+The generation engine is an agentic mixture-of-experts on top of cheap LLMs. Two agent types: **Director** and **Specialist**. Both live in `lib/streamGenerate.ts`.
+
+## Director
+
+One call. Takes the prompt + brand, picks 4–6 scene types in order with durations and a one-sentence brief per scene. Does **not** write the actual copy — that's the specialist's job.
+
+```ts
+const directorResult = await runDirector(prompt, brand);
+// directorResult.plan = [
+//   { type: "statReveal",   duration: 75,  brief: "Open with the user-count number" },
+//   { type: "kineticTitle", duration: 70,  brief: "Pain-point hook"                 },
+//   { type: "featureGrid",  duration: 100, brief: "Three differentiators"          },
+//   { type: "productDemo",  duration: 120, brief: "Quick UI walkthrough"           },
+//   { type: "ctaCard",      duration: 75,  brief: "Free trial CTA"                 },
+// ]
+```
+
+System prompt is constrained to the fixed enum of 10 scene types and per-type duration ranges. Output is enforced as JSON via the LLM's structured-output mode (`response_format: { type: "json_object" }` on NIM, `responseMimeType: "application/json"` on Gemini).
+
+The Director sees the entire prompt and brand. It's the only agent with full context. After it runs, downstream agents only see their slice.
+
+## Specialists
+
+One call per scene in the plan, **all in parallel**.
+
+Each specialist is given:
+
+- Brand (name, color, accent)
+- Duration in frames
+- A one-sentence brief from the Director
+- A schema fragment for **only its own scene type** (see `SPECIALIST_INSTRUCTIONS`)
+
+That last point matters. The kineticTitle specialist never sees the statReveal schema — its prompt is short, its output space is narrow, its failure modes are bounded.
+
+```ts
+plan.forEach((p, idx) => {
+  pending.set(idx, runSpecialist(p, brand).then(r => ({ idx, result: r })));
+});
+
+while (pending.size > 0) {
+  const winner = await Promise.race(pending.values());
+  pending.delete(winner.idx);
+  if (winner.result) yield { type: "scene", scene: winner.result.scene, index: winner.idx };
+}
+```
+
+This is the race-yield pattern. Each completion streams a `scene` event immediately, **in arrival order, not plan order**. The UI accommodates that — scenes can appear at index 2 before index 1.
+
+If a specialist call fails or returns invalid JSON, the scene is dropped. The final storyboard ships with fewer scenes rather than blocking everyone.
+
+## Provider chain
+
+Inside `agentCall`:
+
+```
+1. callGeminiChat(...)    → Gemini 2.5 Flash Lite (default)
+2. callNvidiaChat(...)    → NIM Gemma-4-31B (fallback)
+3. return null            → caller treats as failure
+```
+
+Both have per-call timeouts (`AbortSignal.timeout`) so a hung backend can't stall the whole pipeline.
+
+The fallback ordering used to be NIM-first, but Flash Lite at ~2.3s/call comfortably beats NIM Gemma cold-starts at ~10-20s. NIM is now the safety net.
+
+## Trace events
+
+Every agent emits up to three events:
+
+```ts
+type AgentEvent =
+  | { type: "agent"; agent: "director" | "specialist"; status: "thinking";    message: string;                                              }
+  | { type: "agent"; agent: "director" | "specialist"; status: "done";        message: string; ms: number; source: "nim-gemma" | "gemini"; }
+  | { type: "agent"; agent: "director" | "specialist"; status: "failed";      message: string;                                              };
+```
+
+Specialist events also carry `index` and `sceneType` so the UI can pin them to the right ORDER row.
+
+These events are pure telemetry — if a frontend ignores them, the pipeline behaves identically.
+
+## Why this beats one big LLM call
+
+A monolithic call (one prompt → whole storyboard JSON) was the first version, preserved as commented code at the bottom of `streamGenerate.ts`. It was replaced because:
+
+- **Smaller prompts per call** — each specialist sees one scene type's schema, not all ten. Better adherence to the contract, fewer schema-validation failures.
+- **Parallelism** — total latency is `max(t_director + max(t_specialists))`, not the sum. ~5s instead of ~25s.
+- **Fault isolation** — one bad scene doesn't break the storyboard. The monolithic version had to retry the entire ad.
+- **Cheaper per token** — small focused prompts on Flash Lite, total token spend is ~30% lower than a monolithic Sonnet call.
+
+## Adding a new agent
+
+To add (say) a `BrandVoiceCritic` that runs after specialists and re-rolls anything off-tone:
+
+1. Define its prompt + schema in `lib/streamGenerate.ts`
+2. Add it to the orchestrator after the `while (pending.size > 0)` loop
+3. Add new `AgentEvent` variants for it
+4. Decide: fail-soft (log and continue) or fail-hard (re-roll the scene)
+
+A future improvement: extract each agent into its own file under `lib/agents/`. Right now they're inline in one big orchestrator file because there are only two of them.

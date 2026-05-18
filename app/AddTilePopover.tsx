@@ -95,6 +95,14 @@ const TILES: Tile[] = [
     accent: "#8B5CF6",
     category: "Product",
   },
+  {
+    type: "aiShot",
+    name: "AI Shot",
+    description: "FLUX-generated cinematic shot with caption overlay",
+    icon: "✦",
+    accent: "#EC4899",
+    category: "AI",
+  },
 ];
 
 export const defaultSceneForType = (type: SceneType): Scene => {
@@ -237,6 +245,18 @@ export const defaultSceneForType = (type: SceneType): Scene => {
           },
         ],
         sfx: "switch",
+      };
+    case "aiShot":
+      return {
+        type: "aiShot",
+        duration: 90,
+        imagePrompt:
+          "Abstract cinematic motion-graphic background, soft gradient, brand-coloured, premium ad aesthetic",
+        caption: "Your headline here.",
+        motion: "push-in",
+        overlay: "dark",
+        captionPosition: "bottom",
+        sfx: "whoosh",
       };
   }
 };
