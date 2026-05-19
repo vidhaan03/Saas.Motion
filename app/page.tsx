@@ -30,6 +30,7 @@ import { ThemeToggle } from "./components/ThemeToggle";
 import { UserMenu } from "./components/UserMenu";
 import { DirectorCard } from "./components/agents/DirectorCard";
 import { SpecialistGrid } from "./components/agents/SpecialistGrid";
+import { ResearchProPanel, type ResearchResult, type AdMood } from "./components/ResearchProPanel";
 import { useRouter } from "next/navigation";
 
 const PlayerSkeleton = () => (
@@ -152,8 +153,35 @@ export default function Home() {
     "all",
   );
   const [aspect, setAspect] = useState<Aspect>("vertical");
+  const [researchPro, setResearchPro] = useState(false);
+  const [researchPanelOpen, setResearchPanelOpen] = useState(false);
+  const [researchContext, setResearchContext] = useState<ResearchResult | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const router = useRouter();
+
+  const buildResearchSummary = (ctx: ResearchResult): string => {
+    const parts = [
+      `Verified Product: ${ctx.productName} (${ctx.category}) — ${ctx.productDescription}`,
+    ];
+    if (ctx.stats.length > 0) {
+      parts.push(`Real Stats: ${ctx.stats.map((s) => `${s.value} ${s.label}`).join(", ")}`);
+    }
+    if (ctx.competitorInsights) {
+      parts.push(`Competitor Ad Style: ${ctx.competitorInsights}`);
+    }
+    if (ctx.icons.length > 0) {
+      parts.push(`Use these icons: ${ctx.icons.join(", ")}`);
+    }
+    const moodMap: Record<AdMood, string> = {
+      "auto": "auto-determine intent from prompt",
+      "marketing": "sales-driven, benefit-focused marketing",
+      "feature-launch": "new feature/capability launch",
+      "announcement": "news-style reveal/announcement",
+      "assertion": "bold brand statement/confidence",
+    };
+    parts.push(`Ad Mood: ${moodMap[ctx.mood]}`);
+    return parts.join("\n");
+  };
 
   useEffect(() => {
     setSavedBoards(listBoards());
@@ -377,7 +405,7 @@ export default function Home() {
     setSavedBoards(listBoards());
   };
 
-  const generate = async () => {
+  const generate = async (ctx?: ResearchResult) => {
     // Auth gate: generation costs Gemini/NIM quota, so it requires a signed-in
     // user. Anonymous users can still browse, edit, save to localStorage.
     //
@@ -400,6 +428,8 @@ export default function Home() {
     const controller = new AbortController();
     abortRef.current = controller;
 
+    const activeCtx = ctx ?? researchContext;
+
     setStream({ phase: "streaming", total: 0, received: 0, source: "mock" });
     setActiveBoardId(null);
     setViewMode("generating");
@@ -416,6 +446,7 @@ export default function Home() {
         body: JSON.stringify({
           prompt,
           brand: { name: brandName, color, accent, typeface, vibe },
+          researchContext: activeCtx ? buildResearchSummary(activeCtx) : undefined,
         }),
         signal: controller.signal,
       });
@@ -500,6 +531,17 @@ export default function Home() {
       });
       setViewMode("welcome");
     }
+  };
+
+  const handleResearchComplete = (result: ResearchResult) => {
+    setResearchContext(result);
+    setResearchPanelOpen(false);
+    // Auto-apply the suggested colors
+    setColor(result.suggestedColor);
+    setAccent(result.suggestedAccent);
+    if (!brandName && result.productName) setBrandName(result.productName);
+    // Trigger generation with the research context
+    generate(result);
   };
 
   // FLUX-based parallel generator. Single non-streaming endpoint that
@@ -776,12 +818,49 @@ export default function Home() {
                 onKeyDown={(e) => {
                   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                     e.preventDefault();
-                    if (!streaming && prompt.trim()) generate();
+                    if (!streaming && prompt.trim()) {
+                      if (researchPro) setResearchPanelOpen(true);
+                      else generate();
+                    }
                   }
                 }}
               />
+              {/* Research Pro toggle */}
               <button
-                onClick={generate}
+                onClick={() => setResearchPro((v) => !v)}
+                title="Research Pro: researches your product before generating"
+                className="absolute bottom-3 right-14 flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-[11px] font-medium transition"
+                style={{
+                  background: researchPro
+                    ? "rgba(99, 102, 241, 0.15)"
+                    : "color-mix(in srgb, var(--bg-elev) 80%, transparent)",
+                  borderColor: researchPro
+                    ? "rgba(99, 102, 241, 0.4)"
+                    : "color-mix(in srgb, var(--ink) 12%, transparent)",
+                  color: researchPro ? "#818CF8" : "var(--ink-faint)",
+                }}
+              >
+                <span>⚡</span>
+                <span className="hidden sm:inline">Research Pro</span>
+                {/* Toggle dot */}
+                <span
+                  className="ml-0.5 h-3 w-6 rounded-full transition-all"
+                  style={{ background: researchPro ? "rgba(99,102,241,0.4)" : "color-mix(in srgb, var(--ink) 15%, transparent)", position: "relative" }}
+                >
+                  <span
+                    className="absolute top-0.5 h-2 w-2 rounded-full transition-all"
+                    style={{
+                      background: researchPro ? "#818CF8" : "var(--ink-faint)",
+                      left: researchPro ? "calc(100% - 10px)" : "2px",
+                    }}
+                  />
+                </span>
+              </button>
+              <button
+                onClick={() => {
+                  if (researchPro) setResearchPanelOpen(true);
+                  else generate();
+                }}
                 disabled={streaming || prompt.trim().length === 0}
                 title="Generate (Cmd+Enter)"
                 className="absolute bottom-3 right-3 flex h-10 w-10 items-center justify-center rounded-full transition hover:scale-105 disabled:cursor-not-allowed disabled:opacity-25"
@@ -1178,6 +1257,16 @@ export default function Home() {
           />
           <ThemeToggle compact />
         </div>
+
+        {researchPanelOpen ? (
+          <ResearchProPanel
+            prompt={prompt}
+            existingColor={color}
+            existingAccent={accent}
+            onComplete={handleResearchComplete}
+            onClose={() => setResearchPanelOpen(false)}
+          />
+        ) : null}
       </main>
     );
 

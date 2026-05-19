@@ -5,6 +5,7 @@ import { streamStoryboard } from "../../../lib/streamGenerate";
 const requestSchema = z.object({
   prompt: z.string().min(1).max(2000),
   brand: brandSchema,
+  researchContext: z.string().max(2000).optional(),
 });
 
 const encoder = new TextEncoder();
@@ -27,12 +28,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const { prompt, brand } = parsed.data;
+  const { prompt, brand, researchContext } = parsed.data;
 
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        for await (const event of streamStoryboard(prompt, brand)) {
+        for await (const event of streamStoryboard(prompt, brand, researchContext)) {
           controller.enqueue(sse(event));
         }
       } catch (e) {

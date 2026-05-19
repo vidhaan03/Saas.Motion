@@ -428,8 +428,12 @@ Return ONLY the JSON object.`;
 const runDirector = async (
   prompt: string,
   brand: Brand,
+  researchContext?: string,
 ): Promise<{ plan: ScenePlan[]; source: AgentSource } | null> => {
   const vibe = resolveVibeData(brand.vibe);
+  const researchSection = researchContext
+    ? `\n\nRESEARCH CONTEXT (use this to make the ad more accurate and grounded):\n${researchContext}\n\nIMPORTANT: Use the Real Stats for statReveal scenes. Honor the Icons list for decor choices. Match the Ad Mood.`
+    : "";
   const user = `Brand: ${brand.name}
 Color: ${brand.color}
 Accent: ${brand.accent}
@@ -438,7 +442,7 @@ Vibe guidance: ${vibe.directorHint}
 Color treatment: ${vibe.colorTreatment}
 
 Ad brief:
-${prompt}
+${prompt}${researchSection}
 
 Produce the plan JSON now. Honour the vibe guidance above when choosing scene types, count, and pacing.`;
 
@@ -623,6 +627,7 @@ Produce the scene JSON now.`;
 export async function* streamStoryboard(
   prompt: string,
   brand: Brand,
+  researchContext?: string,
 ): AsyncGenerator<StreamEvent> {
   // Phase 1: Director (sequential — gates the rest).
   const directorStart = Date.now();
@@ -633,7 +638,7 @@ export async function* streamStoryboard(
     message: "Planning scene structure…",
   };
 
-  const directorResult = await runDirector(prompt, brand);
+  const directorResult = await runDirector(prompt, brand, researchContext);
 
   if (!directorResult) {
     yield {
